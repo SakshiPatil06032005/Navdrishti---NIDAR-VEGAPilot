@@ -28,7 +28,9 @@ import {
 } from 'lucide-react'
 import { useState, type ComponentType, type ReactNode } from 'react'
 import { MissionMap } from './components/MissionMap'
+import { FlightTimelinePanel, LiveTelemetryPanel, MissionProgressPanel } from './components/MissionPanels'
 import { PositionAltitudePanel, SensorHealthPanel } from './components/TelemetryPanels'
+import { missionCompletion, mockMission } from './services/mockMission'
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
 
@@ -97,16 +99,6 @@ function SummaryCard({
           {detail}
         </p>
       </div>
-    </div>
-  )
-}
-
-function Metric({ label, value, unit }: { label: string; value: string; unit?: string }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {unit && <small>{unit}</small>}
     </div>
   )
 }
@@ -194,7 +186,7 @@ function App() {
 
           <div className="summary-grid">
             <SummaryCard label="Flight mode" value="AUTO · MISSION" detail="Autonomous navigation" icon={Plane} />
-            <SummaryCard label="Mission status" value="IN PROGRESS" detail="WP 04 of 12 · 33%" icon={Route} tone="green" />
+            <SummaryCard label="Mission status" value={mockMission.state} detail={`WP 04 of 05 · ${missionCompletion}%`} icon={Route} tone="green" />
             <SummaryCard label="Telemetry link" value="CONNECTED" detail="98.4% signal quality" icon={Signal} tone="green" />
             <SummaryCard label="Battery status" value="78%" detail="Estimated 24 min remaining" icon={Battery} tone="amber" />
           </div>
@@ -222,21 +214,15 @@ function App() {
             </Panel>
 
             <Panel title="Mission Progress" icon={BarChart3}>
-              <div className="progress-top"><span>Survey perimeter Alpha</span><strong>33%</strong></div>
-              <div className="progress-track"><div style={{ width: '33%' }} /></div>
-              <div className="progress-meta"><span>04 / 12 waypoints</span><span>ETA 00:18:42</span></div>
-              <div className="mission-stats"><Metric label="Elapsed" value="06:18" /><Metric label="Distance" value="3.8 km" /><Metric label="Coverage" value="42%" /></div>
+              <MissionProgressPanel />
             </Panel>
 
             <Panel title="Live Telemetry" icon={Radio} className="telemetry-panel" action={<span className="live-indicator"><StatusDot /> LIVE</span>}>
-              <div className="telemetry-chart"><div className="chart-grid" /><div className="chart-line" /><div className="chart-line second" /><div className="chart-labels"><span>ALT</span><span>SPD</span><span>BAT</span></div></div>
-              <div className="telemetry-values"><span>ALT <b>124.6 m</b></span><span>SPD <b>12.8 m/s</b></span><span>BAT <b>78%</b></span><span>RSSI <b>-61 dBm</b></span></div>
+              <LiveTelemetryPanel />
             </Panel>
 
             <Panel title="Flight Timeline" icon={Timer}>
-              <div className="timeline">
-                {[['13:17:54', 'Mission started', 'green'], ['13:19:02', 'Takeoff confirmed', 'green'], ['13:21:31', 'Waypoint 03 reached', 'green'], ['13:24:08', 'Waypoint 04 active', 'cyan']].map(([time, event, color]) => <div className="timeline-row" key={time}><span className="font-mono text-[10px] text-slate-500">{time}</span><i className={`timeline-dot ${color}`} /><span className="text-xs text-slate-300">{event}</span></div>)}
-              </div>
+              <FlightTimelinePanel />
             </Panel>
 
             <Panel title="System Log" icon={Terminal} className="log-panel" action={<span className="text-[10px] text-slate-500">AUTO-SCROLL</span>}>

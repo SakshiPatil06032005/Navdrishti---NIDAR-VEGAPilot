@@ -10,6 +10,7 @@ import {
   Thermometer,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
+import { mockMission } from '../services/mockMission'
 
 type SensorIcon = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
 
@@ -34,9 +35,9 @@ const sensorReadings: SensorReading[] = [
     stale: false,
     detail: '6-axis inertial measurement',
     values: [
-      { label: 'ROLL', value: '+1.8°' },
-      { label: 'PITCH', value: '-0.6°' },
-      { label: 'YAW', value: '084.2°' },
+      { label: 'ROLL', value: `+${mockMission.telemetry.roll.toFixed(1)}°` },
+      { label: 'PITCH', value: `${mockMission.telemetry.pitch.toFixed(1)}°` },
+      { label: 'YAW', value: `${mockMission.telemetry.yaw.toFixed(1).padStart(5, '0')}°` },
     ],
   },
   {
@@ -61,7 +62,7 @@ const sensorReadings: SensorReading[] = [
     detail: 'RTK FIX · 14 satellites',
     values: [
       { label: 'FIX', value: 'VALID' },
-      { label: 'SPEED', value: '12.8 m/s' },
+      { label: 'SPEED', value: `${mockMission.telemetry.groundSpeed.toFixed(1)} m/s` },
       { label: 'HDOP', value: '0.7' },
     ],
   },
@@ -74,7 +75,7 @@ const sensorReadings: SensorReading[] = [
     detail: 'Reduced update freshness',
     values: [
       { label: 'PRESSURE', value: '998.4 hPa' },
-      { label: 'REL. ALT', value: '124.6 m' },
+      { label: 'REL. ALT', value: `${mockMission.telemetry.relativeAltitude.toFixed(1)} m` },
     ],
   },
   {
@@ -85,8 +86,8 @@ const sensorReadings: SensorReading[] = [
     stale: false,
     detail: 'Pack telemetry nominal',
     values: [
-      { label: 'VOLTAGE', value: '24.8 V' },
-      { label: 'LEVEL', value: '78%' },
+      { label: 'VOLTAGE', value: `${mockMission.telemetry.batteryVoltage.toFixed(1)} V` },
+      { label: 'LEVEL', value: `${mockMission.telemetry.batteryLevel}%` },
     ],
   },
 ]
@@ -165,12 +166,12 @@ type PositionMetric = {
 const positionMetrics: PositionMetric[] = [
   { label: 'Latitude', value: '18.52390', unit: '° N', icon: MapPin },
   { label: 'Longitude', value: '73.86410', unit: '° E', icon: MapPin },
-  { label: 'Ground speed', value: '12.8', unit: 'm/s', icon: Navigation },
-  { label: 'Heading', value: '084.2', unit: '° MAG', icon: Compass },
-  { label: 'Altitude AGL', value: '124.6', unit: 'm', icon: Gauge },
+  { label: 'Ground speed', value: mockMission.telemetry.groundSpeed.toFixed(1), unit: 'm/s', icon: Navigation },
+  { label: 'Heading', value: mockMission.telemetry.yaw.toFixed(1).padStart(5, '0'), unit: '° MAG', icon: Compass },
+  { label: 'Altitude AGL', value: mockMission.telemetry.relativeAltitude.toFixed(1), unit: 'm', icon: Gauge },
   { label: 'Barometric pressure', value: '998.4', unit: 'hPa', icon: Thermometer, tone: 'amber' },
-  { label: 'Battery voltage', value: '24.8', unit: 'V', icon: Battery, tone: 'green' },
-  { label: 'Battery level', value: '78', unit: '%', icon: Battery, tone: 'green' },
+  { label: 'Battery voltage', value: mockMission.telemetry.batteryVoltage.toFixed(1), unit: 'V', icon: Battery, tone: 'green' },
+  { label: 'Battery level', value: `${mockMission.telemetry.batteryLevel}`, unit: '%', icon: Battery, tone: 'green' },
 ]
 
 function PositionMetric({ metric }: { metric: PositionMetric }) {
@@ -199,9 +200,9 @@ export function PositionAltitudePanel() {
       </div>
       <div className="position-footer">
         <span><Activity size={12} /> IMU attitude</span>
-        <span>ROLL <b>+1.8°</b></span>
-        <span>PITCH <b>-0.6°</b></span>
-        <span>YAW <b>084.2°</b></span>
+        <span>ROLL <b>+{mockMission.telemetry.roll.toFixed(1)}°</b></span>
+        <span>PITCH <b>{mockMission.telemetry.pitch.toFixed(1)}°</b></span>
+        <span>YAW <b>{mockMission.telemetry.yaw.toFixed(1).padStart(5, '0')}°</b></span>
       </div>
     </div>
   )
