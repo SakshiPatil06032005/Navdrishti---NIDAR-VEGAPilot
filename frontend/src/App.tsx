@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import { useState, type ComponentType, type ReactNode } from 'react'
 import { MissionMap } from './components/MissionMap'
+import { PositionAltitudePanel, SensorHealthPanel } from './components/TelemetryPanels'
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
 
@@ -204,20 +205,11 @@ function App() {
             </Panel>
 
             <Panel title="Position & Altitude" icon={Navigation}>
-              <div className="metrics-grid">
-                <Metric label="Altitude AGL" value="124.6" unit="m" /><Metric label="Ground speed" value="12.8" unit="m/s" />
-                <Metric label="Heading" value="084" unit="° MAG" /><Metric label="Distance home" value="1.42" unit="km" />
-              </div>
-              <div className="coordinates"><MapPin size={14} className="text-cyan-300" /><span>18°31'13.4&quot; N</span><span>73°51'24.1&quot; E</span></div>
-              <div className="altitude-bars"><div style={{ width: '68%' }} /><span>ALTITUDE PROFILE</span></div>
+              <PositionAltitudePanel />
             </Panel>
 
             <Panel title="Sensor Health" icon={Gauge}>
-              <div className="health-list">
-                {[['GPS / GNSS', 'RTK FIX', 'green'], ['IMU SYSTEM', 'NOMINAL', 'green'], ['BAROMETER', 'NOMINAL', 'green'], ['MAGNETOMETER', 'CALIBRATING', 'amber']].map(([label, value, color]) => (
-                  <div className="health-row" key={label}><span>{label}</span><strong className={`text-${color === 'green' ? 'emerald' : 'amber'}-400`}><StatusDot color={color as 'green' | 'amber'} />{value}</strong></div>
-                ))}
-              </div>
+              <SensorHealthPanel />
             </Panel>
 
             <Panel title="Fault Alerts" icon={AlertTriangle} action={<span className="badge green">0 ACTIVE</span>}>
