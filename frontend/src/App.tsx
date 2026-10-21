@@ -1,27 +1,270 @@
-import { Radio } from 'lucide-react'
+import {
+  AlertOctagon,
+  AlertTriangle,
+  BarChart3,
+  Battery,
+  Bell,
+  CheckCircle2,
+  ChevronRight,
+  CircleDot,
+  Crosshair,
+  Gauge,
+  Home,
+  LayoutDashboard,
+  List,
+  Map,
+  MapPin,
+  Menu,
+  Navigation,
+  Plane,
+  Radio,
+  Route,
+  Settings,
+  ShieldCheck,
+  Signal,
+  Terminal,
+  Timer,
+  X,
+} from 'lucide-react'
+import { useState, type ComponentType, type ReactNode } from 'react'
+
+type Icon = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
+
+const navItems: { label: string; icon: Icon }[] = [
+  { label: 'Dashboard', icon: LayoutDashboard },
+  { label: 'Mission', icon: Route },
+  { label: 'Waypoints', icon: MapPin },
+  { label: 'Telemetry', icon: Signal },
+  { label: 'Logs', icon: List },
+  { label: 'Settings', icon: Settings },
+]
+
+function Panel({
+  title,
+  icon: IconComponent,
+  children,
+  className = '',
+  action,
+}: {
+  title: string
+  icon?: Icon
+  children: ReactNode
+  className?: string
+  action?: ReactNode
+}) {
+  return (
+    <section className={`panel ${className}`}>
+      <div className="panel-heading">
+        <div className="flex items-center gap-2">
+          {IconComponent && <IconComponent size={15} className="text-cyan-300" />}
+          <h2>{title}</h2>
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function StatusDot({ color = 'green' }: { color?: 'green' | 'amber' | 'red' | 'cyan' }) {
+  return <span className={`status-dot ${color}`} aria-hidden="true" />
+}
+
+function SummaryCard({
+  label,
+  value,
+  detail,
+  icon: IconComponent,
+  tone = 'cyan',
+}: {
+  label: string
+  value: string
+  detail: string
+  icon: Icon
+  tone?: 'cyan' | 'green' | 'amber'
+}) {
+  return (
+    <div className="summary-card">
+      <div className={`summary-icon ${tone}`}>
+        <IconComponent size={19} />
+      </div>
+      <div className="min-w-0">
+        <p className="eyebrow">{label}</p>
+        <p className="mt-1 truncate text-lg font-semibold text-slate-100">{value}</p>
+        <p className={`mt-1 text-[11px] ${tone === 'green' ? 'text-emerald-400' : tone === 'amber' ? 'text-amber-400' : 'text-cyan-300'}`}>
+          {detail}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function Metric({ label, value, unit }: { label: string; value: string; unit?: string }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {unit && <small>{unit}</small>}
+    </div>
+  )
+}
 
 function App() {
+  const [activeNav, setActiveNav] = useState('Dashboard')
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#071426] px-6 text-slate-100">
-      <section className="w-full max-w-3xl border border-slate-700/70 bg-[#0b1d34] px-8 py-16 text-center shadow-2xl shadow-black/30 sm:px-16">
-        <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full border border-cyan-400/40 bg-cyan-400/10 text-cyan-300">
-          <Radio size={30} strokeWidth={1.5} aria-hidden="true" />
+    <div className="min-h-screen bg-[#050e1b] text-slate-200">
+      <aside className={`sidebar ${mobileNavOpen ? 'open' : ''}`}>
+        <div className="sidebar-brand">
+          <div className="brand-mark"><Crosshair size={22} /></div>
+          <div>
+            <p className="text-sm font-bold tracking-[0.12em] text-white">NAVDRISHTI</p>
+            <p className="text-[9px] tracking-[0.3em] text-cyan-300">VEGA-PILOT</p>
+          </div>
+          <button className="ml-auto text-slate-500 lg:hidden" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation">
+            <X size={19} />
+          </button>
         </div>
-        <p className="mb-4 text-xs font-semibold uppercase tracking-[0.35em] text-cyan-300">
-          Team Third Axis
-        </p>
-        <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-5xl">
-          NAVDRISHTI <span className="text-cyan-300">|</span> VEGA-PILOT
-        </h1>
-        <p className="mx-auto mt-6 max-w-xl text-sm leading-6 text-slate-400">
-          Professional drone monitoring and flight intelligence platform.
-        </p>
-        <div className="mx-auto mt-10 h-px w-24 bg-cyan-400/60" />
-        <p className="mt-6 text-xs uppercase tracking-[0.25em] text-slate-500">
-          System initialization in progress
-        </p>
-      </section>
-    </main>
+        <div className="px-4 py-5">
+          <p className="eyebrow mb-3 px-3">Operations</p>
+          <nav className="space-y-1">
+            {navItems.map(({ label, icon: IconComponent }) => (
+              <button
+                key={label}
+                className={`nav-item ${activeNav === label ? 'active' : ''}`}
+                onClick={() => { setActiveNav(label); setMobileNavOpen(false) }}
+              >
+                <IconComponent size={17} />
+                <span>{label}</span>
+                {activeNav === label && <ChevronRight size={14} className="ml-auto text-cyan-300" />}
+              </button>
+            ))}
+          </nav>
+        </div>
+        <div className="mt-auto p-4">
+          <div className="rounded border border-cyan-400/20 bg-cyan-400/5 p-3">
+            <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
+              <Radio size={13} /> Simulated data
+            </div>
+            <p className="text-[10px] leading-4 text-slate-500">Live systems are disconnected. Values shown are for interface preview only.</p>
+          </div>
+          <div className="mt-4 flex items-center gap-2 px-2 text-[10px] text-slate-500">
+            <ShieldCheck size={13} className="text-emerald-400" /> Secure session · v0.1.0
+          </div>
+        </div>
+      </aside>
+
+      <div className="lg:ml-[238px]">
+        <header className="topbar">
+          <button className="mr-3 text-slate-400 lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">
+            <Menu size={21} />
+          </button>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold tracking-wide text-white">NAVDRISHTI <span className="text-cyan-400">|</span> VEGA-PILOT</p>
+            <p className="hidden text-[10px] uppercase tracking-[0.2em] text-slate-500 sm:block">Indigenous Drone Autopilot</p>
+          </div>
+          <div className="ml-auto flex items-center gap-3 sm:gap-6">
+            <div className="hidden items-center gap-2 md:flex">
+              <StatusDot /><span className="text-[10px] uppercase tracking-wider text-emerald-400">Telemetry link nominal</span>
+            </div>
+            <div className="hidden text-right xl:block">
+              <p className="eyebrow">Last packet</p><p className="font-mono text-xs text-slate-300">13:24:08.421 UTC</p>
+            </div>
+            <div className="hidden text-right xl:block">
+              <p className="eyebrow">Link quality</p><p className="font-mono text-xs text-emerald-400">98.4%</p>
+            </div>
+            <Bell size={17} className="text-slate-400" />
+            <div className="hidden text-right sm:block">
+              <p className="eyebrow">Current UTC</p><p className="font-mono text-xs text-cyan-300">21 OCT 2026 · 13:24:12</p>
+            </div>
+          </div>
+        </header>
+
+        <main className="dashboard-content">
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="eyebrow text-cyan-300">Ground control station / overview</p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Mission Dashboard</h1>
+            </div>
+            <div className="simulated-label"><CircleDot size={12} /> SIMULATED DATA</div>
+          </div>
+
+          <div className="summary-grid">
+            <SummaryCard label="Flight mode" value="AUTO · MISSION" detail="Autonomous navigation" icon={Plane} />
+            <SummaryCard label="Mission status" value="IN PROGRESS" detail="WP 04 of 12 · 33%" icon={Route} tone="green" />
+            <SummaryCard label="Telemetry link" value="CONNECTED" detail="98.4% signal quality" icon={Signal} tone="green" />
+            <SummaryCard label="Battery status" value="78%" detail="Estimated 24 min remaining" icon={Battery} tone="amber" />
+          </div>
+
+          <div className="dashboard-grid mt-4">
+            <Panel title="Mission Map" icon={Map} className="map-panel">
+              <div className="map-surface">
+                <div className="map-label top">N <span>↑</span></div>
+                <div className="map-label bottom">LAT 18.5204° N &nbsp; LNG 73.8567° E</div>
+                <div className="map-route route-one" /><div className="map-route route-two" />
+                {[['wp wp-1', '01'], ['wp wp-2', '02'], ['wp wp-3', '03'], ['wp wp-4 current', '04'], ['wp wp-5', '05'], ['wp wp-6', '06']].map(([classes, label]) => <div className={classes} key={label}><span>{label}</span></div>)}
+                <div className="drone-marker"><Plane size={18} fill="currentColor" /></div>
+                <div className="map-scale"><span /><span /><span /> 500 m</div>
+              </div>
+            </Panel>
+
+            <Panel title="Position & Altitude" icon={Navigation}>
+              <div className="metrics-grid">
+                <Metric label="Altitude AGL" value="124.6" unit="m" /><Metric label="Ground speed" value="12.8" unit="m/s" />
+                <Metric label="Heading" value="084" unit="° MAG" /><Metric label="Distance home" value="1.42" unit="km" />
+              </div>
+              <div className="coordinates"><MapPin size={14} className="text-cyan-300" /><span>18°31'13.4&quot; N</span><span>73°51'24.1&quot; E</span></div>
+              <div className="altitude-bars"><div style={{ width: '68%' }} /><span>ALTITUDE PROFILE</span></div>
+            </Panel>
+
+            <Panel title="Sensor Health" icon={Gauge}>
+              <div className="health-list">
+                {[['GPS / GNSS', 'RTK FIX', 'green'], ['IMU SYSTEM', 'NOMINAL', 'green'], ['BAROMETER', 'NOMINAL', 'green'], ['MAGNETOMETER', 'CALIBRATING', 'amber']].map(([label, value, color]) => (
+                  <div className="health-row" key={label}><span>{label}</span><strong className={`text-${color === 'green' ? 'emerald' : 'amber'}-400`}><StatusDot color={color as 'green' | 'amber'} />{value}</strong></div>
+                ))}
+              </div>
+            </Panel>
+
+            <Panel title="Fault Alerts" icon={AlertTriangle} action={<span className="badge green">0 ACTIVE</span>}>
+              <div className="empty-state"><CheckCircle2 size={25} className="text-emerald-400" /><p>All systems operating normally</p><span>No unresolved faults detected</span></div>
+            </Panel>
+
+            <Panel title="Return to Home / Abort Status" icon={Home}>
+              <div className="rth-status"><div className="rth-ring"><Home size={21} /><span>READY</span></div><div><p className="text-sm font-medium text-white">Return to Home available</p><p className="mt-1 text-[11px] text-slate-500">Failsafe altitude: <b className="text-slate-300">100 m</b></p></div></div>
+              <div className="button-row"><button className="outline-button"><Home size={13} /> RTH STANDBY</button><button className="danger-button"><AlertOctagon size={13} /> ABORT</button></div>
+            </Panel>
+
+            <Panel title="Mission Progress" icon={BarChart3}>
+              <div className="progress-top"><span>Survey perimeter Alpha</span><strong>33%</strong></div>
+              <div className="progress-track"><div style={{ width: '33%' }} /></div>
+              <div className="progress-meta"><span>04 / 12 waypoints</span><span>ETA 00:18:42</span></div>
+              <div className="mission-stats"><Metric label="Elapsed" value="06:18" /><Metric label="Distance" value="3.8 km" /><Metric label="Coverage" value="42%" /></div>
+            </Panel>
+
+            <Panel title="Live Telemetry" icon={Radio} className="telemetry-panel" action={<span className="live-indicator"><StatusDot /> LIVE</span>}>
+              <div className="telemetry-chart"><div className="chart-grid" /><div className="chart-line" /><div className="chart-line second" /><div className="chart-labels"><span>ALT</span><span>SPD</span><span>BAT</span></div></div>
+              <div className="telemetry-values"><span>ALT <b>124.6 m</b></span><span>SPD <b>12.8 m/s</b></span><span>BAT <b>78%</b></span><span>RSSI <b>-61 dBm</b></span></div>
+            </Panel>
+
+            <Panel title="Flight Timeline" icon={Timer}>
+              <div className="timeline">
+                {[['13:17:54', 'Mission started', 'green'], ['13:19:02', 'Takeoff confirmed', 'green'], ['13:21:31', 'Waypoint 03 reached', 'green'], ['13:24:08', 'Waypoint 04 active', 'cyan']].map(([time, event, color]) => <div className="timeline-row" key={time}><span className="font-mono text-[10px] text-slate-500">{time}</span><i className={`timeline-dot ${color}`} /><span className="text-xs text-slate-300">{event}</span></div>)}
+              </div>
+            </Panel>
+
+            <Panel title="System Log" icon={Terminal} className="log-panel" action={<span className="text-[10px] text-slate-500">AUTO-SCROLL</span>}>
+              <div className="log-lines">
+                <p><span>13:24:08</span> <b className="text-emerald-400">INFO</b> Telemetry packet received</p>
+                <p><span>13:24:06</span> <b className="text-cyan-300">NAV</b> Heading correction applied</p>
+                <p><span>13:23:54</span> <b className="text-amber-400">WARN</b> Magnetometer calibration in progress</p>
+                <p><span>13:23:42</span> <b className="text-emerald-400">INFO</b> Mission waypoint 04 entered</p>
+              </div>
+            </Panel>
+          </div>
+        </main>
+      </div>
+    </div>
   )
 }
 
