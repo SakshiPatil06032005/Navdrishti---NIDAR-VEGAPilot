@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react'
 import { useState, type ComponentType, type ReactNode } from 'react'
+import { MissionMap } from './components/MissionMap'
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
 
@@ -199,14 +200,7 @@ function App() {
 
           <div className="dashboard-grid mt-4">
             <Panel title="Mission Map" icon={Map} className="map-panel">
-              <div className="map-surface">
-                <div className="map-label top">N <span>↑</span></div>
-                <div className="map-label bottom">LAT 18.5204° N &nbsp; LNG 73.8567° E</div>
-                <div className="map-route route-one" /><div className="map-route route-two" />
-                {[['wp wp-1', '01'], ['wp wp-2', '02'], ['wp wp-3', '03'], ['wp wp-4 current', '04'], ['wp wp-5', '05'], ['wp wp-6', '06']].map(([classes, label]) => <div className={classes} key={label}><span>{label}</span></div>)}
-                <div className="drone-marker"><Plane size={18} fill="currentColor" /></div>
-                <div className="map-scale"><span /><span /><span /> 500 m</div>
-              </div>
+              <MissionMap />
             </Panel>
 
             <Panel title="Position & Altitude" icon={Navigation}>

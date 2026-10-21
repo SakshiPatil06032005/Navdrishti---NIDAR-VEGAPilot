@@ -43,20 +43,31 @@ button { font: inherit; cursor: pointer; }
 .dashboard-grid > .panel:nth-child(7) { grid-column: span 7; }
 .dashboard-grid > .panel:nth-child(8) { grid-column: span 5; }
 .dashboard-grid > .panel:nth-child(9) { grid-column: span 7; }
-.map-surface { position: relative; min-height: 317px; overflow: hidden; background-color: #092239; background-image: linear-gradient(rgba(52, 131, 157, .13) 1px, transparent 1px), linear-gradient(90deg, rgba(52, 131, 157, .13) 1px, transparent 1px); background-size: 42px 42px; }
-.map-surface::before, .map-surface::after { position: absolute; content: ''; border: 1px solid rgba(77, 181, 200, .18); transform: rotate(-18deg); }
-.map-surface::before { inset: 45px 90px 50px 35px; border-radius: 45%; }
-.map-surface::after { inset: 80px 20px 30px 140px; border-radius: 50%; }
-.map-label { position: absolute; z-index: 2; color: #6991a4; font: 9px monospace; letter-spacing: .1em; }
-.map-label.top { top: 14px; left: 15px; color: #76d6e3; }.map-label.top span { font-size: 16px; }
-.map-label.bottom { bottom: 12px; left: 15px; }
-.map-route { position: absolute; z-index: 1; width: 70%; height: 2px; border-top: 1px dashed #2dc5d4; transform-origin: left; }
-.route-one { top: 55%; left: 14%; transform: rotate(-13deg); }.route-two { top: 43%; left: 46%; width: 34%; transform: rotate(46deg); }
-.wp { position: absolute; z-index: 3; display: grid; place-items: center; width: 17px; height: 17px; border: 1px solid #39b7c5; background: #0a2e3d; border-radius: 50%; color: #9ceaf0; font: 8px monospace; }.wp span { position: absolute; top: 19px; }
-.wp-1 { top: 63%; left: 14%; }.wp-2 { top: 53%; left: 30%; }.wp-3 { top: 44%; left: 45%; }.wp-4 { top: 34%; left: 60%; }.wp-5 { top: 51%; left: 72%; }.wp-6 { top: 73%; left: 84%; }
-.wp.current { box-shadow: 0 0 0 5px rgba(34, 211, 238, .15), 0 0 18px #22d3ee; color: white; background: #168399; }
-.drone-marker { position: absolute; z-index: 4; top: 29%; left: 57%; display: grid; place-items: center; width: 32px; height: 32px; color: #07131e; border: 2px solid #b6f7ff; border-radius: 50%; background: #67e8f9; box-shadow: 0 0 20px #22d3ee; transform: rotate(84deg); }
-.map-scale { position: absolute; right: 15px; bottom: 12px; color: #7197a5; font: 9px monospace; }.map-scale span { display: inline-block; width: 12px; border-top: 1px solid #85aab5; }
+.mission-map { position: relative; height: 317px; overflow: hidden; background: #092239; }
+.leaflet-map { height: 100%; width: 100%; background: #092239; }
+.leaflet-container { font-family: inherit; }
+.leaflet-control-zoom { border: 1px solid #24516a !important; border-radius: 3px !important; overflow: hidden; }
+.leaflet-control-zoom a { width: 27px !important; height: 27px !important; color: #9beaf2 !important; border-color: #24516a !important; background: #0a263b !important; line-height: 25px !important; }
+.leaflet-control-zoom a:hover { color: #fff !important; background: #12435b !important; }
+.leaflet-control-attribution { color: #7394a7 !important; background: rgba(5, 18, 31, .8) !important; font-size: 8px !important; }
+.leaflet-control-attribution a { color: #76d6e3 !important; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { color: #bdd3df; border: 1px solid #286079; background: #0a2033; box-shadow: 0 5px 18px #0008; }
+.leaflet-popup-content { margin: 11px 13px; font: 10px/1.8 monospace; }
+.leaflet-popup-content strong { color: #67e8f9; font-size: 10px; }
+.leaflet-container a.leaflet-popup-close-button { color: #8baabd; }
+.drone-leaflet-icon, .home-leaflet-icon, .waypoint-leaflet-icon { display: grid; place-items: center; border-radius: 50%; }
+.drone-leaflet-icon { color: #061522; border: 2px solid #d5fbff; background: #67e8f9; box-shadow: 0 0 0 5px #22d3ee22, 0 0 17px #22d3ee; transform: rotate(45deg); font-size: 16px; }
+.drone-leaflet-icon span { transform: rotate(-45deg); }
+.home-leaflet-icon { color: #b9f8d9; border: 1px solid #34d399; background: #0b453d; box-shadow: 0 0 10px #34d39977; font: bold 12px monospace; }
+.waypoint-leaflet-icon { color: #96dce4; border: 1px solid #2da9b8; background: #0a3343; font: 12px monospace; box-shadow: 0 0 0 2px #092239; }
+.waypoint-leaflet-icon.complete { color: #70e7b5; border-color: #2da979; background: #0c493d; }
+.waypoint-leaflet-icon.current { color: #fff; border-color: #65f5ff; background: #10869a; box-shadow: 0 0 0 5px #22d3ee2c, 0 0 16px #22d3ee; }
+.waypoint-leaflet-icon.selected { box-shadow: 0 0 0 5px #fbbf2438, 0 0 17px #fbbf24; }
+.map-info-panel { position: absolute; z-index: 500; top: 12px; left: 12px; width: 252px; padding: 9px 11px; border: 1px solid #286079; background: #071a2bd9; box-shadow: 0 4px 15px #0006; backdrop-filter: blur(3px); }
+.map-info-title { display: flex; align-items: center; gap: 6px; padding-bottom: 7px; color: #67e8f9; border-bottom: 1px solid #1c4056; font: 9px monospace; letter-spacing: .07em; }
+.map-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; padding-top: 8px; color: #6e8da0; font: 8px monospace; }.map-info-grid b { display: block; margin-top: 2px; color: #d2e5ef; font-weight: 400; }.map-info-grid .valid { color: #6ee7b7; }
+.selected-waypoint { position: absolute; z-index: 500; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 7px; padding: 6px 9px; color: #9cb8c8; border: 1px solid #246579; background: #071a2bd9; font: 8px monospace; }.selected-waypoint span { color: #66889b; }.selected-waypoint strong { color: #67e8f9; }.selected-waypoint small { color: #fbbf24; }
+.map-simulated-stamp { position: absolute; z-index: 500; right: 12px; top: 12px; padding: 5px 7px; color: #fbbf24; border: 1px solid #79591c; background: #2d230ed9; font: bold 8px monospace; letter-spacing: .08em; }
 .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; padding: 15px 15px 9px; }
 .metric { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 8px 0; }.metric span { color: #688197; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }.metric strong { color: #e0edf7; font: 17px monospace; }.metric small { color: #7890a5; font-size: 9px; }
 .coordinates { display: flex; align-items: center; gap: 13px; padding: 10px 15px; border-top: 1px solid #17324c; color: #8ea9be; font: 10px monospace; }.altitude-bars { position: relative; height: 27px; margin: 0 15px 12px; border-bottom: 1px solid #1f4659; }.altitude-bars div { position: absolute; bottom: 0; height: 13px; background: linear-gradient(90deg, #0e8491, #51d4dc); clip-path: polygon(0 100%, 10% 78%, 20% 85%, 32% 30%, 44% 54%, 56% 15%, 68% 62%, 80% 38%, 91% 70%, 100% 10%, 100% 100%); }.altitude-bars span { position: absolute; right: 0; bottom: 3px; color: #547586; font-size: 8px; }
