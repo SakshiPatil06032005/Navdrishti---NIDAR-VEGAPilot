@@ -1,0 +1,1 @@
+"""VEGA-Pilot telemetry backend."""
