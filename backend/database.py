@@ -18,11 +18,13 @@ import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from .models import FaultEvent, SensorStatus, Telemetry
+
+UTC = timezone.utc
 
 logger = logging.getLogger(__name__)
 

@@ -13,11 +13,13 @@ import os
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from time import monotonic
 
 from .models import Telemetry
 from .simulation import SimulationProvider
+
+UTC = timezone.utc
 
 logger = logging.getLogger(__name__)
 

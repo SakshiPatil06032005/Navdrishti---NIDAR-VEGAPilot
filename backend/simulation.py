@@ -6,7 +6,7 @@ free of duplicates and lets the simulator raise realistic transient faults and
 link dropouts that the fault and connection-loss logging can be exercised with.
 """
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from math import sin
 from time import monotonic
 
@@ -25,6 +25,8 @@ from .models import (
     Telemetry,
     TelemetryLinkStatus,
 )
+
+UTC = timezone.utc
 
 #: Fault raised when a sensor stops reporting nominal status.
 SENSOR_FAULTS: dict[str, tuple[str, str]] = {

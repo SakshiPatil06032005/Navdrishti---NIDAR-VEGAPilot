@@ -11,7 +11,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +31,8 @@ from .models import (
 from .recorder import TelemetryRecorder
 from .providers import TelemetryProvider, provider_from_environment
 from .simulation import mission_snapshot
+
+UTC = timezone.utc
 
 logger = logging.getLogger(__name__)
 provider: TelemetryProvider = provider_from_environment()

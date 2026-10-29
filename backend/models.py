@@ -1,7 +1,13 @@
 """Validated API models for simulated VEGA-Pilot telemetry."""
 
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
+
+try:
+    from enum import StrEnum
+except ImportError:
+    class StrEnum(str, Enum):
+        """Compatibility fallback for Python versions before 3.11."""
 
 from pydantic import BaseModel, Field
 
