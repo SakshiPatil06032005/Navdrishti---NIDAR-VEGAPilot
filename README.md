@@ -7,6 +7,12 @@ The current project runs with a simulated telemetry provider. It is prepared
 for future ARIES V3 and wireless telemetry integration, but it does not connect
 to flight hardware by default.
 
+The dashboard has one validated telemetry state shared by all live panels. It
+shows the packet source (`SIMULATION` or `HARDWARE`), WebSocket state, packet
+age, sensor health and stale/error conditions. When hardware mode has no valid
+packet, panels show `--` or `NO DATA`; they never fill the display with
+simulation values.
+
 ## 1. Project overview
 
 ### What it does
@@ -135,6 +141,8 @@ Navdrishti---NIDAR-VEGAPilot/
 - `frontend/src/services/telemetry.tsx` owns the single frontend WebSocket
   connection, validation, reconnection and stale-packet detection.
 - `frontend/src/pages/DashboardPage.tsx` renders the dashboard.
+- `frontend/src/pages/TelemetryPage.tsx` renders live flight data, sensor
+  health, battery diagnostics, communication counters and recent history.
 - `frontend/src/pages/LogsPage.tsx` retrieves and displays stored records.
 
 ## 4. How the project works
@@ -178,6 +186,30 @@ Python FastAPI backend ───────► SQLite log store
 8. The live charts use timestamped packets kept in frontend history.
 9. The Logs page calls the backend HTTP log endpoints and refreshes
    periodically when auto-refresh is enabled.
+
+### Dashboard data-source audit
+
+- The dashboard shell, summary cards, map aircraft position, position and
+  altitude, sensor health, live telemetry charts, mission progress, timeline
+  and system log consume the shared WebSocket telemetry context.
+- `frontend/src/services/mockMission.ts` is no longer used by visible
+  dashboard panels. It remains as legacy preview data for future non-live
+  mission-planning views.
+- Static mission waypoints are rendered only for simulation packets. Hardware
+  mode renders only a validated hardware aircraft position and does not invent
+  a route or home position.
+- SQLite recording remains in the backend recorder and keeps the packet's
+  `data_source` on telemetry, fault and system records.
+
+## 5. Hardware verification boundary
+
+The serial and optional MAVLink providers remain intentionally unverified
+against flight hardware. A documented ARIES V3 or wireless packet framing,
+decoder, units, checksum rules, port configuration and safe test procedure are
+still required. The dashboard can display a decoded packet marked
+`data_source=hardware`, but this project does not claim that a real vehicle,
+autopilot, radio link, arming path, RTH command or abort command has been
+connected or flight-tested.
 
 ## 5. Prerequisites
 
@@ -366,6 +398,53 @@ The Dashboard view displays:
 The dashboard clearly labels simulation data and does not present it as live
 hardware data.
 
+### Settings page
+
+The Settings view persists dashboard preferences and explicit telemetry-source
+selection through the backend. It lists detected serial ports when PySerial
+can enumerate them, and exposes baud rate, connect/disconnect, provider
+status, and backend packet diagnostics. Hardware mode is never replaced with
+simulation readings when no valid packet exists.
+
+System identity and safety values are shown only when supplied by a trusted
+backend integration. The current project does not claim controller firmware,
+device identity, geofence, mission-limit or failsafe validation unless those
+values are explicitly provided and marked validated. The frontend cannot
+override onboard safety limits.
+
+### Mission Management page
+
+The Mission view manages five-waypoint drafts through the backend. Drafts,
+revisions, states, events and command records are persisted in SQLite.
+Simulation commands are acknowledged immediately by the backend; starting a
+simulation mission advances its active waypoint and aborting it changes the
+state to `ABORTED`, stops progression, records a mission event and publishes
+the result to connected telemetry WebSocket clients.
+
+Every command carries a unique `command_id` and is idempotent when retried.
+Hardware commands remain `PENDING_ACK` until an ARIES V3 integration confirms
+them and become `TIMEOUT` if no acknowledgement arrives within the configured
+timeout. This repository does not claim that upload, start or abort has been
+confirmed by real hardware. Browser controls never directly control motors or
+bypass onboard safety logic.
+
+### Waypoints Planner page
+
+The Waypoints view edits the selected five-waypoint prototype mission. Each
+waypoint stores validated latitude, longitude and relative altitude values.
+Map clicks update the selected waypoint, the route is drawn in sequence, and
+the planner supports reorder and clear operations. Route length is a
+consecutive-waypoint estimate and does not infer a home position.
+
+Home coordinates are optional and are displayed separately from waypoint
+markers. The planner never uses dummy coordinates as a home position.
+Configured altitude limits are returned by `GET /api/missions/limits` and are
+validated again by the backend before SQLite persistence. Draft edits remain
+separate from upload state; upload uses the mission command workflow and only
+reports hardware success after an onboard acknowledgement. Simulation upload
+records a simulated confirmation, while hardware execution is never
+simulated.
+
 Connection labels include:
 
 - `CONNECTING`
@@ -391,10 +470,69 @@ The Logs view reads stored data from the backend. It supports:
 
 The available log event types are `TELEMETRY`, `FAULT` and `SYSTEM`.
 
+### Telemetry page
+
+The Telemetry view uses the same validated WebSocket store as the dashboard.
+It shows live position, attitude, vertical speed, flight and mission state,
+sensor health, packet freshness, communication diagnostics and recent fault
+history. Accepted packets are retained for short time-series charts;
+persisted records and CSV export continue to come from SQLite through the Logs
+APIs.
+
+Malformed, incomplete or out-of-range WebSocket frames are rejected and
+counted as invalid rather than displayed. Hardware mode never reads from the
+simulation provider: when hardware has no valid packet, the page shows
+`N/A`, stale, disconnected or error state. Battery power is calculated only
+when voltage and current are finite valid measurements; unsupported
+percentage/current values are not substituted.
+
+### Mission abort and failsafe workflow
+
+Mission abort is a backend command, not a browser motor-control action. The
+Mission Management page requires explicit confirmation, creates a unique
+command ID, validates the mission state, records the command and event in
+SQLite, and displays command history with timestamps.
+
+In simulation mode, a confirmed abort changes the mission to `ABORTED` and
+stops simulated waypoint progression. In hardware mode, commands remain
+non-successful until ARIES V3 reports the onboard lifecycle transition. The
+supported command lifecycle is `REQUESTED`, `SENT`, `ACKNOWLEDGED`,
+`EXECUTING`, `COMPLETED`, `REJECTED` and `TIMEOUT`. Hardware acknowledgement
+is submitted through the backend acknowledgement endpoint; the browser never
+cuts motor power.
+
+Failsafe monitoring is currently an inspection-only policy interface. It
+reports preflight sensor readiness, low battery, GNSS loss, telemetry timeout,
+unavailable state-estimation validity, mission abort and policy validation
+status. Its only permitted configured action is `INSPECT_ONLY`; no automatic
+RTH, landing or other flight action is implemented or claimed flight-tested.
+
+### Notification center and voice alerts
+
+The header notification bell and Notifications page read persisted
+notifications from SQLite. Notifications are generated from validated
+simulation telemetry, validated hardware telemetry, confirmed backend mission
+events and inspection-only failsafe transitions. They include severity, source,
+event ID, timestamps, read/dismissed state and optional mission ID. Dismissing
+an item only hides it from the normal list; the audit row remains in SQLite.
+
+Battery thresholds, hysteresis, cooldown and recovery announcements are
+configurable through the notification policy API. These are dashboard alert
+thresholds, not onboard safety limits, and are not represented as flight-tested
+values. The simulation-only Test Notification controls are unavailable in
+hardware mode.
+
+Voice alerts use the browser Web Speech API. A user must explicitly enable
+voice alerts, and browsers may block speech, have no installed voice, or
+require a user gesture. Critical visual alerts remain available when audio is
+muted or unavailable. Voice announcements are assistive only and must never be
+treated as an onboard failsafe or motor-control mechanism.
+
 ### Dashboard controls that are not connected
 
-The displayed Return-to-Home and Abort controls are not wired to backend
-commands. Do not use them as flight-control commands.
+The displayed Return-to-Home control is not wired to a flight-control command.
+Abort is wired only to the validated mission command workflow described above;
+it does not directly cut motor power or bypass onboard safety logic.
 
 ## 9. Important code explanation
 
@@ -408,10 +546,15 @@ commands. Do not use them as flight-control commands.
 | `backend/simulation.py` | Generates changing simulated position, attitude, battery, sensor-health, link and fault values. |
 | `backend/recorder.py` | Writes telemetry, faults and connection events to the log store. |
 | `backend/database.py` | Creates SQLite tables and implements filtering, history, statistics and CSV export. |
+| `backend/settings.py` | Validates and persists backend-owned source, serial, dashboard, system and safety settings. |
+| `backend/notifications.py` | Derives source-aware notifications from validated telemetry and confirmed mission/failsafe events. |
 | `backend/tests/` | Tests provider behavior, APIs, SQLite persistence and error handling. |
 
 `SerialProvider` intentionally reads raw bytes and accepts an injected decoder.
 It does not guess the ARIES V3 packet structure.
+It also rejects any decoded packet that is not explicitly marked
+`data_source=hardware`; a simulation packet cannot cross the hardware provider
+boundary.
 
 ### Frontend
 
@@ -423,6 +566,7 @@ It does not guess the ARIES V3 packet structure.
 | `frontend/src/App.tsx` | Provides navigation and the application shell. |
 | `frontend/src/pages/DashboardPage.tsx` | Composes dashboard panels. |
 | `frontend/src/pages/LogsPage.tsx` | Provides log search, filtering, charts and export. |
+| `frontend/src/pages/SettingsPage.tsx` | Provides persisted source, serial, preference, system and safety display settings. |
 | `frontend/src/components/MissionMap.tsx` | Displays the Leaflet map and simulated/live GNSS position. |
 | `frontend/src/components/MissionPanels.tsx` | Displays mission progress, live telemetry and charts. |
 | `frontend/src/components/TelemetryPanels.tsx` | Displays sensor health and position/altitude details. |
@@ -510,6 +654,12 @@ Before real hardware integration, provide:
 - MAVLink confirmation and dialect, if applicable.
 - A documented mapping from incoming fields to the existing Pydantic telemetry
   model.
+
+The current project has only a category-level draft BOM (IMU, GNSS, barometer,
+battery monitor/circuit, telemetry interface/radio and connectors). Exact
+approved parts, pins, electrical levels, protocol, baud rate and development
+toolchain remain unconfirmed. Firmware and sensor-driver work must therefore
+remain in bring-up planning until the organizer supplies those documents.
 
 ## 11. Common errors and solutions
 
@@ -665,4 +815,3 @@ Then:
 4. Confirm the backend health endpoint responds:
    `http://127.0.0.1:8000/api/health`.
 5. Stop both terminals with `Ctrl+C`.
-

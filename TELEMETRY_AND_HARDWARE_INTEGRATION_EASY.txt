@@ -1,0 +1,512 @@
+NAVDRISHTI VEGA-Pilot
+EASY TELEMETRY AND HARDWARE INTEGRATION REPORT
+Analysis date: 27 October 2026
+
+============================================================
+1. SABSE IMPORTANT RESULT
+============================================================
+
+Abhi dashboard par jo values dikh rahi hain, woh actual hardware readings nahi
+hain. Woh software-generated simulation/demo values hain.
+
+Current project mein:
+
+- Arduino connected nahi hai.
+- Real GPS/GNSS sensor se data nahi aa raha.
+- Real IMU sensor se data nahi aa raha.
+- Real barometer se data nahi aa raha.
+- Real battery voltage/current measure nahi ho raha.
+- Temperature telemetry available nahi hai.
+- Motor control, arming, RTH aur abort actual hardware ko control nahi karte.
+
+Isliye current battery 78%, 24.8 V aur 8.4 A jaise values ko demo values
+samajhna chahiye.
+
+============================================================
+2. CURRENT TELEMETRY KAHAN SE AA RAHI HAI?
+============================================================
+
+Main file:
+backend\simulation.py
+
+Main class:
+SimulationProvider
+
+Main functions:
+- latest()
+- _build()
+- _health()
+- _link()
+- _faults()
+
+SimulationProvider Python ke andar telemetry packet banata hai. Yeh sensor,
+Arduino, USB, COM port ya external API se data nahi leta.
+
+Values banane ke tareeqe:
+
+- Kuch values fixed hain.
+- Kuch values time ke saath formula se badalti hain.
+- Kuch values sin() mathematical function se move hoti hain.
+- Battery voltage aur percentage elapsed time ke basis par decrease hote hain.
+- Sensor fault aur link outage bhi software schedule se bante hain.
+
+============================================================
+3. CURRENT DATA FLOW
+============================================================
+
+Python SimulationProvider
+        |
+        v
+Telemetry packet
+        |
+        v
+Pydantic validation
+        |
+        +--> SQLite database
+        |
+        +--> FastAPI WebSocket
+                    |
+                    v
+             React frontend
+                    |
+                    v
+             Dashboard panels
+
+Detailed files:
+
+1. backend\simulation.py
+   Simulated values generate karta hai.
+
+2. backend\providers.py
+   Simulation, serial aur optional MAVLink providers ko manage karta hai.
+
+3. backend\models.py
+   Telemetry data ka structure aur validation rules define karta hai.
+
+4. backend\main.py
+   FastAPI server, HTTP APIs aur WebSocket stream chalata hai.
+
+5. backend\recorder.py
+   Telemetry, faults aur connection events ko record karta hai.
+
+6. backend\database.py
+   SQLite database mein records store aur query karta hai.
+
+7. frontend\src\services\telemetry.tsx
+   WebSocket se JSON receive, validate, reconnect aur stale check karta hai.
+
+8. frontend\src\App.tsx
+   Current visible dashboard mount karta hai.
+
+9. frontend\src\services\mockMission.ts
+   Static/demo mission aur telemetry values rakhta hai.
+
+10. frontend\src\components\TelemetryPanels.tsx
+    Position, sensor aur battery UI dikhata hai.
+
+11. frontend\src\components\MissionPanels.tsx
+    Live telemetry-looking cards, charts aur timeline dikhata hai.
+
+============================================================
+4. AVAILABLE TELEMETRY FIELDS
+============================================================
+
+Available simulated fields:
+
+- Latitude
+- Longitude
+- Altitude
+- Ground speed
+- Heading/yaw
+- Roll
+- Pitch
+- IMU rates
+- GNSS fix
+- Satellite count
+- HDOP
+- Barometric pressure
+- Relative altitude
+- Vertical speed
+- Battery voltage
+- Battery current
+- Battery percentage
+- IMU health
+- GNSS health
+- Barometer health
+- Battery health
+- Telemetry link status
+- Signal strength
+- Link latency
+- Mission state
+- Waypoint information
+- Fault events
+
+Not currently available:
+
+- Temperature
+- Battery charging state
+- Battery energy in Wh
+- Motor telemetry
+- Separate real GPS sensor status
+- Real hardware identity
+- Real sensor calibration status
+
+============================================================
+5. FIELD SOURCE SUMMARY
+============================================================
+
+Latitude/longitude:
+  Simulated formula in backend\simulation.py.
+
+Altitude:
+  Simulated sine-wave formula.
+
+Speed:
+  Simulated formula.
+
+Heading/yaw:
+  Elapsed time ke basis par simulated formula.
+
+Roll/pitch:
+  Simulated formula.
+
+Pressure:
+  Fixed simulated value: 998.4 hPa.
+
+Battery voltage:
+  Simulated value. Actual battery voltage nahi.
+
+Battery current:
+  Fixed simulated value: 8.4 A. Actual current nahi.
+
+Battery percentage:
+  Simulated estimated/demo value. Actual fuel-gauge reading nahi.
+
+Sensor health:
+  Software schedule ke basis par VALID ya DEGRADED.
+
+Connection:
+  Software-generated simulated link state. Actual Arduino connection proof nahi.
+
+============================================================
+6. CURRENT FRONTEND IMPORTANT FINDING
+============================================================
+
+frontend\src\services\telemetry.tsx mein WebSocket client bana hua hai:
+
+- URL: ws://localhost:8000/ws/telemetry
+- JSON parse karta hai.
+- Packet validate karta hai.
+- Latest packet store karta hai.
+- Last 60 packets ki history rakhta hai.
+- 3 seconds ke baad data stale mark karta hai.
+- 1.5 seconds baad reconnect karta hai.
+
+Lekin frontend\src\main.tsx directly App.tsx ko mount karta hai.
+
+Current App.tsx ke kai panels:
+
+- mockMission values use karte hain.
+- Hardcoded values use karte hain.
+- Static map coordinates use karte hain.
+
+Iska matlab:
+
+Backend live telemetry infrastructure bana hua hai, lekin currently visible
+dashboard ka har panel live WebSocket data se connected hai, yeh verify nahi hai.
+Current screen values ko hardware live data nahi kehna chahiye.
+
+============================================================
+7. AB TAK PROJECT MEIN KYA BUILD HUA
+============================================================
+
+Git history aur code ke basis par:
+
+1. React/Vite frontend setup.
+2. Dashboard layout aur styling.
+3. Leaflet simulated mission map.
+4. Position aur altitude panels.
+5. Sensor health panel.
+6. Mission progress panel.
+7. Live telemetry-looking charts.
+8. Flight timeline.
+9. Python FastAPI backend.
+10. Deterministic simulation provider.
+11. Pydantic telemetry validation.
+12. WebSocket telemetry stream.
+13. SQLite telemetry logs.
+14. Fault aur link event recording.
+15. Log filtering, statistics aur CSV export.
+16. Raw diagnostic page/API.
+17. Serial provider scaffold.
+18. Optional MAVLink scaffold.
+19. Backend API, database aur provider tests.
+
+============================================================
+8. FUTURE HARDWARE ARCHITECTURE
+============================================================
+
+Actual sensors
+      |
+      v
+Arduino/controller
+      |
+      v
+USB serial COM port
+      |
+      v
+Python pyserial receiver
+      |
+      v
+Message validation and processing
+      |
+      v
+FastAPI/WebSocket/logging
+      |
+      v
+React dashboard
+
+Arduino ka kaam:
+
+- Sensors initialize karna.
+- Sensor readings collect karna.
+- Units standardize karna.
+- Sensor errors detect karna.
+- Battery monitor read karna.
+- JSON ya agreed structured message bhejna.
+
+Python ka kaam:
+
+- COM port open karna.
+- Arduino message read karna.
+- Framing/checksum validate karna.
+- JSON parse karna.
+- Range aur unit validate karna.
+- Hardware telemetry model banana.
+- Last packet time track karna.
+- Dashboard aur database ko packet dena.
+
+============================================================
+9. FUTURE MESSAGE FORMAT
+============================================================
+
+New hardware ko readable JSON line bhejne ka plan ho sakta hai:
+
+{
+  "schema_version": 1,
+  "sequence": 1234,
+  "gnss": {"lat_deg": 0.0, "lon_deg": 0.0, "alt_m": 0.0},
+  "imu": {"roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0},
+  "barometer": {"pressure_hpa": 0.0},
+  "battery": {"voltage_v": 0.0, "current_a": 0.0, "percent": null},
+  "health": {
+    "gnss": "NO DATA",
+    "imu": "NO DATA",
+    "barometer": "NO DATA",
+    "battery": "NO DATA"
+  }
+}
+
+Exact format abhi pending hai. Framing, checksum, units, timestamps aur
+schema ko hardware select karne ke baad final karna hoga.
+
+============================================================
+10. BATTERY INTEGRATION
+============================================================
+
+Actual battery voltage ke liye:
+
+- Battery-monitoring IC/module, ya
+- Properly calculated resistor divider + ADC
+
+Use karna hoga.
+
+Battery ko directly Arduino pin par connect nahi karna chahiye jab tak:
+
+- Maximum battery voltage verify na ho.
+- Arduino ADC limit verify na ho.
+- Divider ratio calculate na ho.
+- Resistor power rating check na ho.
+- Grounding verify na ho.
+- Overvoltage/reverse-polarity protection na ho.
+
+Battery percentage ke liye:
+
+- Battery chemistry.
+- Cell count.
+- Full/empty voltage.
+- Capacity.
+- Charge/discharge curve.
+- Calibration.
+
+Required honge. Simple voltage-to-percent mapping rough estimate hi hogi.
+
+Battery current/power ke liye:
+
+- Current sensor ya shunt monitor.
+- Correct current range.
+- Correct polarity.
+- Peak current handling.
+- Heat and noise verification.
+
+Required honge.
+
+Arduino USB power ko mission battery status mat samajhna.
+
+============================================================
+11. CONNECTION AND SENSOR STATUS
+============================================================
+
+Controller status:
+
+- CONNECTING: Connection try ho raha hai.
+- CONNECTED: Recent valid packets aa rahe hain.
+- RECONNECTING: Connection lost, retry chal rahi hai.
+- DISCONNECTED: COM port open nahi ho raha.
+- COMMUNICATION ERROR: Invalid packet/read error.
+- STALE DATA: Time par valid packet nahi aaya.
+
+Sensor status alag hona chahiye:
+
+- VALID
+- DEGRADED
+- FAILED
+- NO DATA
+
+COM port open hona sirf itna batata hai ki transport open hua. Isse yeh prove
+nahi hota ki GPS, IMU, barometer aur battery sensor sab properly work kar rahe
+hain.
+
+============================================================
+12. FUTURE DASHBOARD SECTIONS
+============================================================
+
+Device Status:
+  Controller name, firmware, COM port, connection status, last packet time.
+
+Battery Monitoring:
+  Voltage, percentage, current, power, charging state, warnings.
+
+Live Telemetry:
+  GNSS, altitude, speed, heading, IMU, barometer.
+
+Sensor Health:
+  Har sensor ka status, last update, error reason.
+
+Communication Monitor:
+  Valid/invalid packet count, timeout, reconnects, sequence gaps.
+
+Telemetry Source:
+  Hardware, simulation ya API source label.
+
+Historical Data:
+  Sensor trends aur battery history.
+
+============================================================
+13. PENDING INFORMATION
+============================================================
+
+Abhi yeh information available nahi hai:
+
+- Exact Arduino/controller model.
+- Sensor models.
+- Battery chemistry, capacity aur voltage.
+- Required current range.
+- COM port.
+- Baud rate.
+- Serial protocol.
+- JSON/binary format.
+- Sampling frequency.
+- Pin mapping.
+- I2C/SPI/UART addresses.
+- Power and electrical compatibility.
+- Calibration process.
+- Low-battery threshold.
+- Charging-state support.
+
+In specifications ko invent nahi karna chahiye. Hardware select karne ke baad
+confirm karna hoga.
+
+============================================================
+14. FUTURE IMPLEMENTATION ORDER
+============================================================
+
+1. Controller aur sensor models confirm karo.
+2. Battery specifications confirm karo.
+3. Electrical design aur safe wiring finalize karo.
+4. Message format, units aur sampling rates decide karo.
+5. Arduino firmware mein sensor reading add karo.
+6. Arduino se sequence number aur health status bhejo.
+7. Python serial decoder implement karo.
+8. Invalid/stale packets reject karo.
+9. Simulation aur hardware mode separate rakho.
+10. Existing API/WebSocket/logging se hardware packets connect karo.
+11. Dashboard ko validated live context se wire karo.
+12. Bench testing ke baad hi flight testing karo.
+
+============================================================
+15. TESTING PLAN
+============================================================
+
+Software tests:
+
+- Valid JSON test.
+- Invalid JSON test.
+- Missing field test.
+- Wrong unit/range test.
+- Stale packet test.
+- Duplicate packet test.
+- Sequence gap test.
+- Reconnect test.
+
+Hardware bench tests:
+
+- Har sensor individually test.
+- Multimeter se battery voltage compare.
+- Current sensor polarity/range test.
+- USB unplug/replug test.
+- Sensor disconnect test.
+- Low battery warning test.
+- Motor noise ke saath test.
+
+============================================================
+16. FINAL STATUS
+============================================================
+
+CURRENTLY IMPLEMENTED:
+
+- Simulation telemetry.
+- Dashboard UI.
+- WebSocket infrastructure.
+- Pydantic validation.
+- SQLite logs.
+- Fault/link logging.
+- Serial provider scaffold.
+- Tests and diagnostics.
+
+FUTURE HARDWARE INTEGRATION:
+
+- Arduino firmware.
+- Real sensor drivers.
+- Battery monitor.
+- Serial protocol and decoder.
+- Hardware connection state.
+- Sensor health state.
+- Real dashboard wiring.
+- Bench and flight verification.
+
+NOT YET VERIFIED:
+
+- Real Arduino connection.
+- Real sensor measurements.
+- Real battery voltage/current/percentage.
+- Exact hardware specifications.
+- Electrical safety and compatibility.
+- Flight operation.
+
+FINAL CONCLUSION:
+
+Abhi dashboard simulation/demo mode mein hai. Project mein future hardware
+integration ke liye backend foundation bana hua hai, lekin actual Arduino,
+sensors, battery-monitoring circuit, serial protocol aur real hardware testing
+abhi pending hain.

@@ -9,6 +9,7 @@ from, so simulated frames are never mixed with hardware frames.
 import asyncio
 import logging
 import os
+from uuid import uuid4
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
@@ -19,6 +20,8 @@ from fastapi.responses import HTMLResponse, Response
 
 from .database import DEFAULT_DB_PATH, LogFilter, LogStore
 from .models import (
+    CommandLifecycle,
+    DataSource,
     LogEntry,
     LogHistoryPoint,
     LogHistoryResponse,
@@ -26,10 +29,19 @@ from .models import (
     LogRecordsResponse,
     LogStatsResponse,
     MissionResponse,
+    MissionLimits,
+    MissionState,
+    NotificationSeverity,
+    NotificationPolicy,
+    NotificationRecord,
     Telemetry,
 )
+from .failsafe import FailsafePolicy, FailsafeStatus, evaluate_failsafe
 from .recorder import TelemetryRecorder
-from .providers import TelemetryProvider, provider_from_environment
+from .notifications import NotificationManager
+from .providers import SerialProvider, SimulationTelemetryProvider, TelemetryProvider, provider_from_environment
+from .settings import DashboardPreferences, SerialSettings, SettingsState, SettingsStore
+from .mission import MissionCommandResult, MissionDraft, MissionEvent, MissionManager, MissionStore
 from .simulation import mission_snapshot
 
 UTC = timezone.utc
@@ -40,7 +52,12 @@ provider_start_error: str | None = None
 
 #: The log store location can be overridden so tests never touch the real data.
 store = LogStore(os.environ.get("VEGA_PILOT_DB") or DEFAULT_DB_PATH)
-recorder = TelemetryRecorder(store)
+notification_manager = NotificationManager(store)
+recorder = TelemetryRecorder(store, notification_manager)
+settings_store = SettingsStore(os.environ.get("VEGA_PILOT_DB") or DEFAULT_DB_PATH)
+mission_store = MissionStore(os.environ.get("VEGA_PILOT_DB") or DEFAULT_DB_PATH)
+mission_manager = MissionManager(mission_store)
+mission_clients: set[WebSocket] = set()
 
 RECORD_INTERVAL_S = 1.0
 
@@ -51,7 +68,40 @@ async def _record_loop() -> None:
         try:
             packet = provider.latest()
             if packet is not None:
-                recorder.record(packet)
+                mission_event = mission_manager.tick()
+                if mission_event:
+                    await _broadcast_mission_event(mission_event)
+                    notification = notification_manager.from_mission_event(
+                        code=mission_event.code,
+                        message=mission_event.message,
+                        source=packet.data_source,
+                        mission_id=mission_event.mission_id,
+                        event_id=f"{packet.data_source.value}:mission:{mission_event.id}",
+                    )
+                    if notification:
+                        await _broadcast_notification_event(notification)
+                packet = packet.model_copy(update={"mission_status": mission_manager.status()})
+                policy = settings_store.load().notifications
+                recorder.set_notification_policy(policy)
+                created = recorder.record(packet)
+                stale_notification = notification_manager.on_stale(source=packet.data_source, stale=provider.stale)
+                if stale_notification:
+                    created.append(stale_notification)
+                failsafe = evaluate_failsafe(packet, FailsafePolicy(), stale=provider.stale, mission_state=mission_manager.selected().state.value)
+                failsafe_notification = notification_manager.on_failsafe_state(
+                    source=packet.data_source,
+                    active=not failsafe.preflight_ready,
+                    mission_id=mission_manager.selected_id,
+                )
+                if failsafe_notification:
+                    created.append(failsafe_notification)
+                for notification in created:
+                    await _broadcast_notification_event(notification)
+            else:
+                default_source = DataSource.SIMULATION if provider.name == "simulation" else DataSource.HARDWARE
+                stale_notification = notification_manager.on_stale(source=default_source, stale=provider.stale)
+                if stale_notification:
+                    await _broadcast_notification_event(stale_notification)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -90,7 +140,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["GET", "PUT", "POST"],
     allow_headers=["*"],
 )
 
@@ -149,8 +199,177 @@ async def health() -> dict[str, str]:
         "provider_stale": str(provider.stale).lower(),
         "provider_error": provider_start_error or "",
         "serial_protocol": getattr(provider, "protocol", ""),
+        "packet_error_count": str(getattr(provider, "packet_error_count", 0)),
+        "valid_packet_count": str(getattr(provider, "valid_packet_count", 0)),
+        "invalid_packet_count": str(getattr(provider, "invalid_packet_count", 0)),
+        "reconnect_attempts": str(getattr(provider, "reconnect_attempts", 0)),
+        "packet_sequence": str(getattr(provider, "packet_sequence", 0)),
+        "timeout_count": str(getattr(provider, "timeout_count", 0)),
+        "last_valid_packet_at": (
+            getattr(provider, "last_valid_packet_at", None).isoformat()
+            if getattr(provider, "last_valid_packet_at", None)
+            else ""
+        ),
         "log_store": "degraded" if store.last_error else "ok",
     }
+
+
+def _serial_ports() -> list[dict[str, str]]:
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return []
+    return [
+        {"device": port.device, "description": port.description or "Serial port"}
+        for port in list_ports.comports()
+    ]
+
+
+@app.get("/api/settings", response_model=SettingsState)
+async def get_settings() -> SettingsState:
+    return settings_store.load()
+
+
+@app.put("/api/settings/dashboard", response_model=DashboardPreferences)
+async def update_dashboard_settings(preferences: DashboardPreferences) -> DashboardPreferences:
+    settings = settings_store.load()
+    settings.dashboard = preferences
+    settings_store.save(settings)
+    return preferences
+
+
+@app.get("/api/notifications/policy", response_model=NotificationPolicy)
+async def get_notification_policy() -> NotificationPolicy:
+    settings = settings_store.load()
+    return settings.notifications
+
+
+@app.put("/api/notifications/policy", response_model=NotificationPolicy)
+async def update_notification_policy(policy: NotificationPolicy) -> NotificationPolicy:
+    settings = settings_store.load()
+    settings.notifications = policy
+    settings_store.save(settings)
+    recorder.set_notification_policy(policy)
+    return policy
+
+
+@app.get("/api/notifications", response_model=list[NotificationRecord])
+async def notifications(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    include_dismissed: bool = Query(False),
+) -> list[NotificationRecord]:
+    return store.list_notifications(limit=limit, offset=offset, include_dismissed=include_dismissed)
+
+
+@app.get("/api/notifications/unread-count")
+async def unread_notifications_count() -> dict[str, int]:
+    return {"unread_count": store.unread_notifications_count()}
+
+
+@app.post("/api/notifications/{notification_id}/read")
+async def read_notification(notification_id: str) -> dict[str, bool]:
+    changed = store.mark_notification_read(notification_id)
+    if not changed:
+        raise HTTPException(status_code=404, detail="Notification not found.")
+    return {"ok": True}
+
+
+@app.post("/api/notifications/{notification_id}/dismiss")
+async def dismiss_notification(notification_id: str) -> dict[str, bool]:
+    changed = store.dismiss_notification(notification_id)
+    if not changed:
+        raise HTTPException(status_code=404, detail="Notification not found.")
+    return {"ok": True}
+
+
+@app.post("/api/notifications/read-all")
+async def read_all_notifications() -> dict[str, int]:
+    return {"updated": store.mark_all_notifications_read()}
+
+
+@app.post("/api/notifications/test", response_model=NotificationRecord)
+async def test_notification(
+    severity: str = Query("INFORMATION", pattern="^(CRITICAL|WARNING|INFORMATION|SUCCESS)$"),
+) -> NotificationRecord:
+    if provider.name != "simulation":
+        raise HTTPException(status_code=400, detail="Test notifications are available only in simulation mode.")
+    source = DataSource.SIMULATION if provider.name == "simulation" else DataSource.HARDWARE
+    level = NotificationSeverity(severity)
+    notification = notification_manager.emit(
+        event_id=f"{source.value}:test:{severity}:{int(datetime.now(UTC).timestamp())}",
+        alert_type="TEST_NOTIFICATION",
+        severity=level,
+        title=f"Test {severity.title()} notification",
+        message="This is a test notification generated for dashboard validation.",
+        voice_message=f"{severity.title()} test alert.",
+        source=source,
+        mission_id=mission_manager.selected_id,
+        timestamp=datetime.now(UTC),
+    )
+    if notification is None:
+        raise HTTPException(status_code=409, detail="Unable to create test notification.")
+    await _broadcast_notification_event(notification)
+    return notification
+
+
+@app.get("/api/settings/serial/ports")
+async def serial_ports() -> list[dict[str, str]]:
+    return _serial_ports()
+
+
+@app.put("/api/settings/serial", response_model=SerialSettings)
+async def update_serial_settings(serial: SerialSettings) -> SerialSettings:
+    settings = settings_store.load()
+    settings.serial = serial
+    settings_store.save(settings)
+    return serial
+
+
+@app.put("/api/settings/source", response_model=SettingsState)
+async def update_source(source: str = Query(..., pattern="^(simulation|hardware)$")) -> SettingsState:
+    global provider, provider_start_error
+    current = settings_store.load()
+    if source == "simulation":
+        replacement: TelemetryProvider = SimulationTelemetryProvider()
+    else:
+        replacement = SerialProvider(
+            port=current.serial.port,
+            baudrate=current.serial.baud_rate,
+        )
+    await provider.stop()
+    provider = replacement
+    provider_start_error = None
+    current.source = source
+    settings_store.save(current)
+    return current
+
+
+@app.post("/api/settings/serial/connect", response_model=SettingsState)
+async def connect_serial() -> SettingsState:
+    global provider, provider_start_error
+    settings = settings_store.load()
+    if settings.source != "hardware":
+        raise HTTPException(status_code=409, detail="Select hardware mode before connecting a serial provider.")
+    if not settings.serial.port:
+        raise HTTPException(status_code=400, detail="A serial port is required before connecting.")
+    if not isinstance(provider, SerialProvider) or provider.port != settings.serial.port:
+        await provider.stop()
+        provider = SerialProvider(port=settings.serial.port, baudrate=settings.serial.baud_rate)
+    try:
+        await provider.start()
+        provider_start_error = None
+    except Exception as exc:
+        provider_start_error = str(exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return settings
+
+
+@app.post("/api/settings/serial/disconnect", response_model=SettingsState)
+async def disconnect_serial() -> SettingsState:
+    global provider
+    await provider.stop()
+    return settings_store.load()
 
 
 @app.get("/api/telemetry/latest", response_model=Telemetry)
@@ -163,7 +382,171 @@ async def latest_telemetry() -> Telemetry:
 
 @app.get("/api/mission", response_model=MissionResponse)
 async def mission() -> MissionResponse:
-    return MissionResponse.model_validate(mission_snapshot())
+    current = mission_manager.selected()
+    status = mission_manager.status(current)
+    return MissionResponse(name=current.name, state=status.state, waypoints=current.waypoints,
+                           completion_percent=status.completed_waypoints / status.total_waypoints * 100)
+
+
+@app.get("/api/missions", response_model=list[MissionDraft])
+async def missions() -> list[MissionDraft]:
+    return mission_store.list_missions()
+
+
+@app.get("/api/missions/limits", response_model=MissionLimits)
+async def mission_limits() -> MissionLimits:
+    return mission_store.limits()
+
+
+@app.get("/api/missions/{mission_id}/route-length")
+async def mission_route_length(mission_id: str) -> dict[str, float]:
+    try:
+        mission = mission_store.get(mission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found.") from exc
+    return {"distance_m": MissionStore.route_length_m(mission)}
+
+
+@app.get("/api/missions/{mission_id}", response_model=MissionDraft)
+async def get_mission(mission_id: str) -> MissionDraft:
+    try:
+        return mission_store.get(mission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found.") from exc
+
+
+@app.post("/api/missions", response_model=MissionDraft, status_code=201)
+async def create_mission(mission: MissionDraft) -> MissionDraft:
+    return mission_store.save(mission.model_copy(update={"id": mission.id or str(uuid4())}))
+
+
+@app.put("/api/missions/{mission_id}", response_model=MissionDraft)
+async def update_mission(mission_id: str, mission: MissionDraft) -> MissionDraft:
+    try:
+        current = mission_store.get(mission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found.") from exc
+    if current.state in (MissionState.UPLOADED, MissionState.EXECUTING):
+        raise HTTPException(status_code=409, detail="Executing or uploaded missions cannot be edited.")
+    return mission_store.save(mission.model_copy(update={"id": mission_id, "revision": current.revision + 1}))
+
+
+@app.delete("/api/missions/{mission_id}", status_code=204)
+async def delete_mission(mission_id: str) -> None:
+    if mission_id == mission_manager.selected_id:
+        raise HTTPException(status_code=409, detail="Select another mission before deleting the active draft.")
+    try:
+        mission_store.get(mission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found.") from exc
+    mission_store.delete(mission_id)
+
+
+@app.post("/api/missions/{mission_id}/select", response_model=MissionDraft)
+async def select_mission(mission_id: str) -> MissionDraft:
+    try:
+        return mission_manager.select(mission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/missions/{mission_id}/events", response_model=list[MissionEvent])
+async def mission_events(mission_id: str) -> list[MissionEvent]:
+    return mission_store.events(mission_id)
+
+
+@app.get("/api/missions/{mission_id}/commands", response_model=list[MissionCommandResult])
+async def mission_commands(mission_id: str) -> list[MissionCommandResult]:
+    return mission_store.commands(mission_id)
+
+
+@app.post("/api/missions/{mission_id}/commands/{command}", response_model=MissionCommandResult)
+async def mission_command(mission_id: str, command: str, command_id: str = Query(..., min_length=8)) -> MissionCommandResult:
+    if mission_id != mission_manager.selected_id:
+        raise HTTPException(status_code=409, detail="Select the mission before issuing commands.")
+    try:
+        result = mission_manager.execute(command, command_id, provider.name != "simulation")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await _broadcast_mission_event(result)
+    return result
+
+
+@app.get("/api/missions/commands/{command_id}", response_model=MissionCommandResult)
+async def mission_command_status(command_id: str) -> MissionCommandResult:
+    try:
+        return mission_manager.command_status(command_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Mission command not found.") from exc
+
+
+@app.post("/api/missions/commands/{command_id}/ack", response_model=MissionCommandResult)
+async def acknowledge_mission_command(
+    command_id: str,
+    status: CommandLifecycle = Query(..., description="ARIES V3 reported lifecycle state"),
+) -> MissionCommandResult:
+    try:
+        result = mission_manager.acknowledge(command_id, status)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await _broadcast_mission_event(result)
+    return result
+
+
+@app.get("/api/failsafe/policy", response_model=FailsafePolicy)
+async def get_failsafe_policy() -> FailsafePolicy:
+    settings = settings_store.load()
+    return FailsafePolicy.model_validate(settings.safety.failsafe_policy or {})
+
+
+@app.put("/api/failsafe/policy", response_model=FailsafePolicy)
+async def update_failsafe_policy(policy: FailsafePolicy) -> FailsafePolicy:
+    settings = settings_store.load()
+    settings.safety.failsafe_policy = policy.model_dump(mode="json")
+    settings.safety.validation_status = policy.validation_status
+    settings_store.save(settings)
+    return policy
+
+
+@app.get("/api/failsafe/status", response_model=FailsafeStatus)
+async def failsafe_status() -> FailsafeStatus:
+    policy = FailsafePolicy.model_validate(settings_store.load().safety.failsafe_policy or {})
+    return evaluate_failsafe(
+        provider.latest(),
+        policy,
+        stale=provider.stale,
+        mission_state=mission_manager.selected().state.value,
+    )
+
+
+async def _broadcast_mission_event(payload: object) -> None:
+    if not mission_clients:
+        return
+    message = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+    stale_clients: list[WebSocket] = []
+    for client in mission_clients:
+        try:
+            await client.send_json({"type": "mission_event", "payload": message})
+        except Exception:
+            stale_clients.append(client)
+    for client in stale_clients:
+        mission_clients.discard(client)
+
+
+async def _broadcast_notification_event(notification: NotificationRecord) -> None:
+    if not mission_clients:
+        return
+    stale_clients: list[WebSocket] = []
+    message = {"type": "notification_event", "payload": notification.model_dump(mode="json")}
+    for client in mission_clients:
+        try:
+            await client.send_json(message)
+        except Exception:
+            stale_clients.append(client)
+    for client in stale_clients:
+        mission_clients.discard(client)
 
 
 @app.get("/api/logs", response_model=list[LogEntry])
@@ -272,6 +655,7 @@ def export_logs_csv(
 @app.websocket("/ws/telemetry")
 async def telemetry_socket(websocket: WebSocket) -> None:
     await websocket.accept()
+    mission_clients.add(websocket)
     packet = provider.latest()
     source = packet.data_source.value if packet is not None else provider.name
     recorder.record_client_connected(source)
@@ -287,9 +671,11 @@ async def telemetry_socket(websocket: WebSocket) -> None:
                 )
             await asyncio.sleep(1)
     except WebSocketDisconnect:
+        mission_clients.discard(websocket)
         recorder.record_client_disconnected(source)
         logger.info("Telemetry WebSocket disconnected: %s", websocket.client)
     except Exception:
+        mission_clients.discard(websocket)
         logger.exception("Unexpected telemetry WebSocket failure")
         recorder.record_client_disconnected(source)
         await websocket.close(code=1011, reason="Telemetry stream failed")

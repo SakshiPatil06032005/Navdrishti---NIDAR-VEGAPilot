@@ -20,7 +20,8 @@ from .database import (
     SEVERITY_WARNING,
     LogStore,
 )
-from .models import Telemetry
+from .models import NotificationPolicy, Telemetry
+from .notifications import NotificationManager
 
 logger = logging.getLogger(__name__)
 
@@ -28,22 +29,33 @@ logger = logging.getLogger(__name__)
 class TelemetryRecorder:
     """Stores telemetry packets and derives fault and link system events."""
 
-    def __init__(self, store: LogStore) -> None:
+    def __init__(self, store: LogStore, notifications: NotificationManager | None = None) -> None:
         self._store = store
+        self._notifications = notifications
+        self._policy = NotificationPolicy()
         self._link_connected: bool | None = None
 
     @property
     def store(self) -> LogStore:
         return self._store
 
-    def record(self, packet: Telemetry) -> None:
+    def set_notification_policy(self, policy: NotificationPolicy) -> None:
+        self._policy = policy
+
+    def record(self, packet: Telemetry) -> list:
         """Persist a telemetry packet together with its faults and link state."""
+        created: list = []
         self._store.record_telemetry(packet)
+        if self._notifications:
+            created.extend(self._notifications.from_telemetry(packet, self._policy))
         for fault in packet.fault_events:
             self._store.record_fault(fault, packet.data_source.value, fault.sensor)
-        self._track_link(packet)
+        link_alert = self._track_link(packet)
+        if link_alert is not None:
+            created.append(link_alert)
+        return created
 
-    def _track_link(self, packet: Telemetry) -> None:
+    def _track_link(self, packet: Telemetry):
         """Record connection loss and recovery when the link state changes."""
         connected = packet.telemetry_link.connected
         source = packet.data_source.value
@@ -58,10 +70,10 @@ class TelemetryRecorder:
                     source,
                     SENSOR_LINK,
                 )
-            return
+            return self._notifications.on_link_change(source=packet.data_source, connected=False) if self._notifications else None
 
         if connected == self._link_connected:
-            return
+            return None
 
         self._link_connected = connected
         if connected:
@@ -72,6 +84,7 @@ class TelemetryRecorder:
                 source,
                 SENSOR_LINK,
             )
+            return self._notifications.on_link_change(source=packet.data_source, connected=True) if self._notifications else None
         else:
             self._store.record_system_event(
                 EVENT_CONNECTION_LOST,
@@ -80,6 +93,7 @@ class TelemetryRecorder:
                 source,
                 SENSOR_LINK,
             )
+            return self._notifications.on_link_change(source=packet.data_source, connected=False) if self._notifications else None
 
     def record_client_connected(self, source: str) -> None:
         self._store.record_system_event(

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import monotonic
 
-from .models import Telemetry
+from .models import DataSource, Telemetry
 from .simulation import SimulationProvider
 
 UTC = timezone.utc
@@ -138,6 +138,14 @@ class SerialProvider(TelemetryProvider):
         self._connected = False
         self._diagnostics: list[DiagnosticMessage] = []
         self._stop = asyncio.Event()
+        self.packet_error_count = 0
+        self.valid_packet_count = 0
+        self.invalid_packet_count = 0
+        self.reconnect_attempts = 0
+        self.packet_sequence = 0
+        self.timeout_count = 0
+        self.last_valid_packet_at: datetime | None = None
+        self._was_stale = True
 
     async def start(self) -> None:
         if os.getenv("VEGA_SERIAL_ENABLED", "false").lower() != "true":
@@ -179,19 +187,40 @@ class SerialProvider(TelemetryProvider):
                 raw = await asyncio.to_thread(self._serial.readline)  # type: ignore[union-attr]
                 if not raw:
                     self._connected = not self.stale
+                    if self.stale and not self._was_stale:
+                        self.timeout_count += 1
+                    self._was_stale = self.stale
                     continue
                 self._last_packet_at = monotonic()
                 self._connected = True
+                self._was_stale = False
                 self._record(raw, f"received:{self.protocol}")
                 if self._decoder is not None:
-                    decoded = self._decoder(raw)
+                    try:
+                        decoded = self._decoder(raw)
+                    except Exception:
+                        self.packet_error_count += 1
+                        self.invalid_packet_count += 1
+                        raise
                     if decoded is not None:
+                        if decoded.data_source is not DataSource.HARDWARE:
+                            self.packet_error_count += 1
+                            self.invalid_packet_count += 1
+                            self._record(raw, "rejected-non-hardware-source")
+                            continue
+                        self.packet_sequence += 1
+                        self.valid_packet_count += 1
                         self._latest = decoded
+                        self.last_valid_packet_at = datetime.now(UTC)
                         self._record(raw, "decoded")
+                    else:
+                        self.packet_error_count += 1
+                        self.invalid_packet_count += 1
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._connected = False
+                self.reconnect_attempts += 1
                 self._record(str(exc).encode(), "error")
                 self._close_serial()
                 await asyncio.sleep(1)

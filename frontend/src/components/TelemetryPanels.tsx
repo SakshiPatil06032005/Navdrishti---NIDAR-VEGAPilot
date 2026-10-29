@@ -1,96 +1,8 @@
-import {
-  Activity,
-  Battery,
-  Compass,
-  Gauge,
-  LocateFixed,
-  MapPin,
-  Navigation,
-  Radio,
-  Thermometer,
-} from 'lucide-react'
+import { Activity, Battery, Compass, Gauge, LocateFixed, MapPin, Navigation, Radio, Thermometer } from 'lucide-react'
 import type { ComponentType } from 'react'
-import { mockMission } from '../services/mockMission'
+import { useTelemetry, type SensorStatus } from '../services/telemetry'
 
 type SensorIcon = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
-
-export type SensorStatus = 'VALID' | 'DEGRADED' | 'FAILED' | 'NO DATA'
-
-type SensorReading = {
-  name: string
-  icon: SensorIcon
-  status: SensorStatus
-  lastUpdate: string
-  stale: boolean
-  detail: string
-  values: { label: string; value: string }[]
-}
-
-const sensorReadings: SensorReading[] = [
-  {
-    name: 'IMU · ACCELEROMETER',
-    icon: Activity,
-    status: 'VALID',
-    lastUpdate: '0.8s ago',
-    stale: false,
-    detail: '6-axis inertial measurement',
-    values: [
-      { label: 'ROLL', value: `+${mockMission.telemetry.roll.toFixed(1)}°` },
-      { label: 'PITCH', value: `${mockMission.telemetry.pitch.toFixed(1)}°` },
-      { label: 'YAW', value: `${mockMission.telemetry.yaw.toFixed(1).padStart(5, '0')}°` },
-    ],
-  },
-  {
-    name: 'IMU · GYROSCOPE',
-    icon: Compass,
-    status: 'VALID',
-    lastUpdate: '0.8s ago',
-    stale: false,
-    detail: 'Angular velocity nominal',
-    values: [
-      { label: 'ROLL RATE', value: '0.02°/s' },
-      { label: 'PITCH RATE', value: '0.01°/s' },
-      { label: 'YAW RATE', value: '0.08°/s' },
-    ],
-  },
-  {
-    name: 'GNSS RECEIVER',
-    icon: LocateFixed,
-    status: 'VALID',
-    lastUpdate: '1.1s ago',
-    stale: false,
-    detail: 'RTK FIX · 14 satellites',
-    values: [
-      { label: 'FIX', value: 'VALID' },
-      { label: 'SPEED', value: `${mockMission.telemetry.groundSpeed.toFixed(1)} m/s` },
-      { label: 'HDOP', value: '0.7' },
-    ],
-  },
-  {
-    name: 'BAROMETER',
-    icon: Gauge,
-    status: 'DEGRADED',
-    lastUpdate: '18.4s ago',
-    stale: true,
-    detail: 'Reduced update freshness',
-    values: [
-      { label: 'PRESSURE', value: '998.4 hPa' },
-      { label: 'REL. ALT', value: `${mockMission.telemetry.relativeAltitude.toFixed(1)} m` },
-    ],
-  },
-  {
-    name: 'BATTERY MONITOR',
-    icon: Battery,
-    status: 'VALID',
-    lastUpdate: '2.0s ago',
-    stale: false,
-    detail: 'Pack telemetry nominal',
-    values: [
-      { label: 'VOLTAGE', value: `${mockMission.telemetry.batteryVoltage.toFixed(1)} V` },
-      { label: 'LEVEL', value: `${mockMission.telemetry.batteryLevel}%` },
-    ],
-  },
-]
 
 const statusColors: Record<SensorStatus, string> = {
   VALID: 'valid',
@@ -100,110 +12,73 @@ const statusColors: Record<SensorStatus, string> = {
 }
 
 export function SensorStatusBadge({ status }: { status: SensorStatus }) {
-  return (
-    <span className={`sensor-status ${statusColors[status]}`}>
-      <span className="status-dot" />
-      {status}
-    </span>
-  )
+  return <span className={`sensor-status ${statusColors[status]}`}><span className="status-dot" />{status}</span>
 }
 
-function SensorRow({ reading }: { reading: SensorReading }) {
-  const Icon = reading.icon
-
-  return (
-    <article className={`sensor-row ${reading.stale ? 'stale' : ''}`}>
-      <div className={`sensor-icon ${statusColors[reading.status]}`}>
-        <Icon size={15} />
-      </div>
-      <div className="sensor-main">
-        <div className="sensor-row-heading">
-          <div>
-            <h3>{reading.name}</h3>
-            <p>{reading.detail}</p>
-          </div>
-          <SensorStatusBadge status={reading.status} />
-        </div>
-        <div className="sensor-values">
-          {reading.values.map(({ label, value }) => (
-            <span key={label}><small>{label}</small><b>{value}</b></span>
-          ))}
-        </div>
-        <div className={`sensor-freshness ${reading.stale ? 'stale' : ''}`}>
-          <span className="freshness-pulse" />
-          LAST UPDATE <b>{reading.lastUpdate}</b>
-          {reading.stale && <em>STALE DATA</em>}
-        </div>
-      </div>
-    </article>
-  )
+function ageLabel(ageMs: number | null) {
+  return ageMs === null ? '--' : `${(ageMs / 1000).toFixed(1)}s ago`
 }
 
 export function SensorHealthPanel() {
-  return (
-    <div className="sensor-health-panel">
-      <div className="sensor-legend">
-        {(['VALID', 'DEGRADED', 'FAILED', 'NO DATA'] as SensorStatus[]).map((status) => (
-          <SensorStatusBadge key={status} status={status} />
-        ))}
+  const { telemetry, ageMs, stale } = useTelemetry()
+  const statuses: { name: string; icon: SensorIcon; status: SensorStatus; detail: string; values: { label: string; value: string }[] }[] = [
+    { name: 'IMU · ATTITUDE', icon: Activity, status: telemetry?.sensor_health.imu ?? 'NO DATA', detail: 'Roll, pitch and yaw', values: [
+      { label: 'ROLL', value: telemetry ? `${telemetry.imu_attitude.roll_deg >= 0 ? '+' : ''}${telemetry.imu_attitude.roll_deg.toFixed(1)}°` : '--' },
+      { label: 'PITCH', value: telemetry ? `${telemetry.imu_attitude.pitch_deg.toFixed(1)}°` : '--' },
+      { label: 'YAW', value: telemetry ? `${telemetry.imu_attitude.yaw_deg.toFixed(1)}°` : '--' },
+    ] },
+    { name: 'IMU · GYROSCOPE', icon: Compass, status: telemetry?.sensor_health.imu ?? 'NO DATA', detail: 'Angular velocity', values: [
+      { label: 'ROLL RATE', value: telemetry ? `${telemetry.imu_attitude.roll_rate_dps.toFixed(2)}°/s` : '--' },
+      { label: 'PITCH RATE', value: telemetry ? `${telemetry.imu_attitude.pitch_rate_dps.toFixed(2)}°/s` : '--' },
+      { label: 'YAW RATE', value: telemetry ? `${telemetry.imu_attitude.yaw_rate_dps.toFixed(2)}°/s` : '--' },
+    ] },
+    { name: 'GNSS RECEIVER', icon: LocateFixed, status: telemetry?.sensor_health.gnss ?? 'NO DATA', detail: telemetry ? `${telemetry.gnss_position.fix} · ${telemetry.gnss_position.satellites} satellites` : 'No packet received', values: [
+      { label: 'FIX', value: telemetry?.gnss_position.fix ?? '--' },
+      { label: 'SPEED', value: telemetry ? `${telemetry.gnss_position.ground_speed_mps.toFixed(1)} m/s` : '--' },
+      { label: 'HDOP', value: telemetry ? telemetry.gnss_position.hdop.toFixed(1) : '--' },
+    ] },
+    { name: 'BAROMETER', icon: Gauge, status: telemetry?.sensor_health.barometer ?? 'NO DATA', detail: 'Relative altitude', values: [
+      { label: 'PRESSURE', value: telemetry ? `${telemetry.barometer.pressure_hpa.toFixed(1)} hPa` : '--' },
+      { label: 'REL. ALT', value: telemetry ? `${telemetry.barometer.relative_altitude_m.toFixed(1)} m` : '--' },
+    ] },
+    { name: 'BATTERY MONITOR', icon: Battery, status: telemetry?.sensor_health.battery ?? 'NO DATA', detail: 'Power telemetry', values: [
+      { label: 'VOLTAGE', value: telemetry ? `${telemetry.battery.voltage_v.toFixed(1)} V` : '--' },
+      { label: 'LEVEL', value: telemetry ? `${telemetry.battery.remaining_percent.toFixed(0)}%` : '--' },
+    ] },
+  ]
+
+  return <div className="sensor-health-panel">
+    <div className="sensor-legend">{(['VALID', 'DEGRADED', 'FAILED', 'NO DATA'] as SensorStatus[]).map((status) => <SensorStatusBadge key={status} status={status} />)}</div>
+    <div className="sensor-list">{statuses.map(({ name, icon: Icon, status, detail, values }) => <article className={`sensor-row ${stale ? 'stale' : ''}`} key={name}>
+      <div className={`sensor-icon ${statusColors[status]}`}><Icon size={15} /></div>
+      <div className="sensor-main"><div className="sensor-row-heading"><div><h3>{name}</h3><p>{detail}</p></div><SensorStatusBadge status={status} /></div>
+        <div className="sensor-values">{values.map(({ label, value }) => <span key={label}><small>{label}</small><b>{value}</b></span>)}</div>
+        <div className={`sensor-freshness ${stale ? 'stale' : ''}`}><span className="freshness-pulse" /> LAST UPDATE <b>{ageLabel(ageMs)}</b>{stale && <em>STALE DATA</em>}</div>
       </div>
-      <div className="sensor-list">
-        {sensorReadings.map((reading) => <SensorRow key={reading.name} reading={reading} />)}
-      </div>
-      <div className="sensor-simulated-note"><Radio size={12} /> Static simulated telemetry · no hardware connection</div>
-    </div>
-  )
+    </article>)}</div>
+    <div className="sensor-simulated-note"><Radio size={12} /> {telemetry ? `${telemetry.data_source.toUpperCase()} telemetry · validated packet` : 'No telemetry packet available'}</div>
+  </div>
 }
 
-type PositionMetric = {
-  label: string
-  value: string
-  unit?: string
-  icon: SensorIcon
-  tone?: 'cyan' | 'green' | 'amber'
-}
-
-const positionMetrics: PositionMetric[] = [
-  { label: 'Latitude', value: '18.52390', unit: '° N', icon: MapPin },
-  { label: 'Longitude', value: '73.86410', unit: '° E', icon: MapPin },
-  { label: 'Ground speed', value: mockMission.telemetry.groundSpeed.toFixed(1), unit: 'm/s', icon: Navigation },
-  { label: 'Heading', value: mockMission.telemetry.yaw.toFixed(1).padStart(5, '0'), unit: '° MAG', icon: Compass },
-  { label: 'Altitude AGL', value: mockMission.telemetry.relativeAltitude.toFixed(1), unit: 'm', icon: Gauge },
-  { label: 'Barometric pressure', value: '998.4', unit: 'hPa', icon: Thermometer, tone: 'amber' },
-  { label: 'Battery voltage', value: mockMission.telemetry.batteryVoltage.toFixed(1), unit: 'V', icon: Battery, tone: 'green' },
-  { label: 'Battery level', value: `${mockMission.telemetry.batteryLevel}`, unit: '%', icon: Battery, tone: 'green' },
-]
-
-function PositionMetric({ metric }: { metric: PositionMetric }) {
-  const Icon = metric.icon
-  return (
-    <div className="position-metric">
-      <div className={`position-metric-icon ${metric.tone ?? 'cyan'}`}><Icon size={13} /></div>
-      <div>
-        <span>{metric.label}</span>
-        <strong>{metric.value}<small>{metric.unit}</small></strong>
-      </div>
-    </div>
-  )
-}
+type PositionMetric = { label: string; value: string; unit?: string; icon: SensorIcon; tone?: 'cyan' | 'green' | 'amber' }
 
 export function PositionAltitudePanel() {
-  return (
-    <div className="position-panel">
-      <div className="position-fix-banner">
-        <div className="fix-icon"><LocateFixed size={15} /></div>
-        <div><span>GNSS FIX VALID</span><small>RTK FIX · 14 satellites · HDOP 0.7</small></div>
-        <span className="position-freshness"><span className="status-dot" /> 1.1s</span>
-      </div>
-      <div className="position-metrics">
-        {positionMetrics.map((metric) => <PositionMetric key={metric.label} metric={metric} />)}
-      </div>
-      <div className="position-footer">
-        <span><Activity size={12} /> IMU attitude</span>
-        <span>ROLL <b>+{mockMission.telemetry.roll.toFixed(1)}°</b></span>
-        <span>PITCH <b>{mockMission.telemetry.pitch.toFixed(1)}°</b></span>
-        <span>YAW <b>{mockMission.telemetry.yaw.toFixed(1).padStart(5, '0')}°</b></span>
-      </div>
-    </div>
-  )
+  const { telemetry, ageMs, stale } = useTelemetry()
+  const position = telemetry?.gnss_position
+  const metrics: PositionMetric[] = [
+    { label: 'Latitude', value: position ? Math.abs(position.latitude_deg).toFixed(5) : '--', unit: position ? (position.latitude_deg >= 0 ? '° N' : '° S') : undefined, icon: MapPin },
+    { label: 'Longitude', value: position ? Math.abs(position.longitude_deg).toFixed(5) : '--', unit: position ? (position.longitude_deg >= 0 ? '° E' : '° W') : undefined, icon: MapPin },
+    { label: 'Ground speed', value: position?.ground_speed_mps.toFixed(1) ?? '--', unit: 'm/s', icon: Navigation },
+    { label: 'Heading', value: position?.heading_deg.toFixed(1) ?? '--', unit: '° MAG', icon: Compass },
+    { label: 'Altitude AGL', value: telemetry?.barometer.relative_altitude_m.toFixed(1) ?? '--', unit: 'm', icon: Gauge },
+    { label: 'Barometric pressure', value: telemetry?.barometer.pressure_hpa.toFixed(1) ?? '--', unit: 'hPa', icon: Thermometer, tone: 'amber' },
+    { label: 'Battery voltage', value: telemetry?.battery.voltage_v.toFixed(1) ?? '--', unit: 'V', icon: Battery, tone: 'green' },
+    { label: 'Battery level', value: telemetry?.battery.remaining_percent.toFixed(0) ?? '--', unit: '%', icon: Battery, tone: 'green' },
+  ]
+  const fixStatus = telemetry?.sensor_health.gnss ?? 'NO DATA'
+  return <div className="position-panel">
+    <div className="position-fix-banner"><div className="fix-icon"><LocateFixed size={15} /></div><div><span>GNSS {fixStatus}</span><small>{position ? `${position.fix} · ${position.satellites} satellites · HDOP ${position.hdop.toFixed(1)}` : 'No packet received'}</small></div><span className="position-freshness"><span className="status-dot" /> {ageLabel(ageMs)}</span></div>
+    <div className="position-metrics">{metrics.map((metric) => { const Icon = metric.icon; return <div className="position-metric" key={metric.label}><div className={`position-metric-icon ${metric.tone ?? 'cyan'}`}><Icon size={13} /></div><div><span>{metric.label}</span><strong>{metric.value}<small>{metric.unit}</small></strong></div></div> })}</div>
+    <div className="position-footer"><span><Activity size={12} /> IMU attitude</span><span>ROLL <b>{telemetry?.imu_attitude.roll_deg.toFixed(1) ?? '--'}°</b></span><span>PITCH <b>{telemetry?.imu_attitude.pitch_deg.toFixed(1) ?? '--'}°</b></span><span>YAW <b>{telemetry?.imu_attitude.yaw_deg.toFixed(1) ?? '--'}°</b></span>{stale && <span className="text-amber-400">STALE</span>}</div>
+  </div>
 }
