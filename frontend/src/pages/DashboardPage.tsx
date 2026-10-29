@@ -22,14 +22,15 @@ import { PositionAltitudePanel, SensorHealthPanel } from '../components/Telemetr
 import { useTelemetry, type ConnectionState } from '../services/telemetry'
 
 export function DashboardPage() {
-  const { telemetry, connectionState, stale, history } = useTelemetry()
+  const { telemetry, connectionState, stale, history, ageMs, error } = useTelemetry()
   const mission = telemetry?.mission_status
-  const connectionTone = connectionState === 'CONNECTED' && !stale ? 'green' : connectionState === 'RECONNECTING' ? 'amber' : 'red'
+  const connectionTone = connectionState === 'CONNECTED' && !stale ? 'green' : connectionState === 'CONNECTING' || connectionState === 'RECONNECTING' || stale ? 'amber' : 'red'
   const connectionLabel: Record<ConnectionState, string> = {
     CONNECTING: 'CONNECTING',
     CONNECTED: 'CONNECTED',
     DISCONNECTED: 'DISCONNECTED',
     RECONNECTING: 'RECONNECTING',
+    ERROR: 'ERROR',
   }
   const faults = telemetry?.fault_events ?? []
   const sourceLabel = telemetry
@@ -49,10 +50,10 @@ export function DashboardPage() {
       </div>
 
       <div className="summary-grid">
-        <SummaryCard label="Flight mode" value={telemetry?.flight_mode ?? '--'} detail={telemetry ? 'Simulation provider' : 'Awaiting telemetry'} icon={Plane} />
+        <SummaryCard label="Flight mode" value={telemetry?.flight_mode ?? '--'} detail={telemetry ? `${telemetry.data_source.toUpperCase()} source` : 'Awaiting telemetry'} icon={Plane} />
         <SummaryCard label="Mission status" value={mission?.state ?? '--'} detail={mission ? `${mission.current_waypoint} · ${Math.round((mission.completed_waypoints / mission.total_waypoints) * 100)}%` : 'Awaiting telemetry'} icon={Route} tone="green" />
-        <SummaryCard label="Telemetry link" value={stale ? 'STALE' : connectionLabel[connectionState]} detail={telemetry ? `${telemetry.telemetry_link.signal_strength_percent.toFixed(1)}% signal quality` : 'No packet received'} icon={Signal} tone="green" />
-        <SummaryCard label="Battery status" value={telemetry ? `${telemetry.battery.remaining_percent.toFixed(0)}%` : '--'} detail={telemetry ? `${telemetry.battery.voltage_v.toFixed(1)} V · simulated` : 'Awaiting telemetry'} icon={Battery} tone="amber" />
+        <SummaryCard label="Telemetry link" value={stale ? 'STALE' : connectionLabel[connectionState]} detail={telemetry ? `${telemetry.telemetry_link.signal_strength_percent.toFixed(1)}% signal · ${ageMs === null ? '--' : `${(ageMs / 1000).toFixed(1)}s old`}` : 'No packet received'} icon={Signal} tone={connectionTone === 'red' ? 'red' : 'green'} />
+        <SummaryCard label="Battery status" value={telemetry ? `${telemetry.battery.remaining_percent.toFixed(0)}%` : '--'} detail={telemetry ? `${telemetry.battery.voltage_v.toFixed(1)} V · ${telemetry.data_source.toUpperCase()}` : 'Awaiting telemetry'} icon={Battery} tone="amber" />
       </div>
 
       <div className="dashboard-grid mt-4">
@@ -69,7 +70,7 @@ export function DashboardPage() {
         </Panel>
 
         <Panel title="Fault Alerts" icon={AlertTriangle} action={<span className={`badge ${faults.length ? 'degraded' : 'green'}`}>{faults.length} ACTIVE</span>}>
-          {faults.length ? <div className="empty-state"><AlertTriangle size={25} className="text-amber-400" /><p>{faults.length} fault event{faults.length === 1 ? '' : 's'} reported</p>{faults.map((fault) => <span key={`${fault.timestamp}-${fault.code}`}>{fault.code}: {fault.message}</span>)}</div> : <div className="empty-state"><CheckCircle2 size={25} className="text-emerald-400" /><p>{telemetry ? 'All systems operating normally' : 'Awaiting telemetry'}</p><span>{telemetry ? 'No unresolved simulated faults detected' : 'No fault state available'}</span></div>}
+          {faults.length ? <div className="empty-state"><AlertTriangle size={25} className="text-amber-400" /><p>{faults.length} fault event{faults.length === 1 ? '' : 's'} reported</p>{faults.map((fault) => <span key={`${fault.timestamp}-${fault.code}`}>{fault.code}: {fault.message}</span>)}</div> : <div className="empty-state"><CheckCircle2 size={25} className="text-emerald-400" /><p>{telemetry ? 'All systems operating normally' : 'Awaiting telemetry'}</p><span>{telemetry ? `No unresolved ${telemetry.data_source} faults reported` : 'No fault state available'}</span></div>}
         </Panel>
 
         <Panel title="Return to Home / Abort Status" icon={Home}>
@@ -92,7 +93,7 @@ export function DashboardPage() {
         <Panel title="System Log" icon={Terminal} className="log-panel" action={<span className="text-[10px] text-slate-500">AUTO-SCROLL</span>}>
           <div className="log-lines">
             {history.slice(-4).reverse().map((packet) => <p key={packet.timestamp}><span>{new Date(packet.timestamp).toLocaleTimeString()}</span> <b className="text-emerald-400">INFO</b> Telemetry packet received · {packet.data_source.toUpperCase()}</p>)}
-            {!history.length && <p><span>--</span> <b className="text-amber-400">WARN</b> Waiting for telemetry packets</p>}
+            {!history.length && <p><span>--</span> <b className="text-amber-400">WARN</b> {error ?? 'Waiting for telemetry packets'}</p>}
           </div>
         </Panel>
       </div>

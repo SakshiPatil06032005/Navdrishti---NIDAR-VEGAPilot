@@ -11,6 +11,7 @@ import type { LatLngBoundsExpression } from 'leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { useEffect, useMemo, useState } from 'react'
+import { useTelemetry } from '../services/telemetry'
 
 type SimulatedCoordinate = [number, number]
 
@@ -37,7 +38,6 @@ type SimulatedWaypoint = {
 }
 
 const simulatedHome: SimulatedCoordinate = [18.5204, 73.8567]
-const simulatedDrone: SimulatedCoordinate = [18.5239, 73.8641]
 const simulatedWaypoints: SimulatedWaypoint[] = [
   { id: 'wp1', label: 'WP1', coordinate: [18.5204, 73.8567], altitude: 100, status: 'complete' },
   { id: 'wp2', label: 'WP2', coordinate: [18.5222, 73.8602], altitude: 112, status: 'complete' },
@@ -84,18 +84,29 @@ function formatCoordinate(value: number, positive: string, negative: string) {
 }
 
 export function MissionMap({ tileProvider = openStreetMapProvider }: { tileProvider?: TileProvider }) {
+  const { telemetry } = useTelemetry()
+  const isSimulation = telemetry?.data_source === 'simulation'
+  const latitude = telemetry?.gnss_position.latitude_deg
+  const longitude = telemetry?.gnss_position.longitude_deg
+  const currentPosition = useMemo<SimulatedCoordinate>(
+    () => latitude !== undefined && longitude !== undefined
+      ? [latitude, longitude]
+      : [0, 0],
+    [latitude, longitude],
+  )
+  const hasTelemetry = telemetry !== null
   const [selectedWaypointId, setSelectedWaypointId] = useState('wp4')
   const selectedWaypoint = simulatedWaypoints.find(({ id }) => id === selectedWaypointId) ?? simulatedWaypoints[0]
   const route = useMemo<SimulatedCoordinate[]>(
-    () => [simulatedHome, ...simulatedWaypoints.map(({ coordinate }) => coordinate), simulatedHome],
-    [],
+    () => isSimulation ? [simulatedHome, ...simulatedWaypoints.map(({ coordinate }) => coordinate), simulatedHome] : (hasTelemetry ? [currentPosition] : []),
+    [currentPosition, hasTelemetry, isSimulation],
   )
-  const bounds = useMemo<LatLngBoundsExpression>(() => route, [route])
+  const bounds = useMemo<LatLngBoundsExpression>(() => route.length ? route : [[0, 0], [1, 1]], [route])
 
   return (
     <div className="mission-map">
       <MapContainer
-        center={simulatedDrone}
+        center={currentPosition}
         zoom={14}
         scrollWheelZoom
         zoomControl
@@ -108,8 +119,8 @@ export function MissionMap({ tileProvider = openStreetMapProvider }: { tileProvi
           maxZoom={tileProvider.maxZoom ?? 19}
         />
         <FitMissionBounds bounds={bounds} />
-        <Polyline positions={route} pathOptions={{ color: '#28c8d7', weight: 2, dashArray: '7 7' }} />
-        <Marker position={simulatedHome} icon={homeIcon}>
+        {isSimulation && <Polyline positions={route} pathOptions={{ color: '#28c8d7', weight: 2, dashArray: '7 7' }} />}
+        {isSimulation && <Marker position={simulatedHome} icon={homeIcon}>
           <Popup>
             <strong>HOME · SIMULATED</strong>
             <br />
@@ -117,8 +128,8 @@ export function MissionMap({ tileProvider = openStreetMapProvider }: { tileProvi
             <br />
             {formatCoordinate(simulatedHome[0], 'N', 'S')} · {formatCoordinate(simulatedHome[1], 'E', 'W')}
           </Popup>
-        </Marker>
-        {simulatedWaypoints.map((waypoint) => (
+        </Marker>}
+        {isSimulation && simulatedWaypoints.map((waypoint) => (
           <Marker
             key={waypoint.id}
             position={waypoint.coordinate}
@@ -136,27 +147,27 @@ export function MissionMap({ tileProvider = openStreetMapProvider }: { tileProvi
             </Popup>
           </Marker>
         ))}
-        <Marker position={simulatedDrone} icon={droneIcon}>
+        {telemetry && <Marker position={currentPosition} icon={droneIcon}>
           <Popup>
-            <strong>DRONE · SIMULATED GNSS</strong>
+            <strong>DRONE · {telemetry.data_source.toUpperCase()} GNSS</strong>
             <br />
-            Current simulated aircraft position
+            Current validated aircraft position
           </Popup>
-        </Marker>
-        <CircleMarker
-          center={simulatedDrone}
+        </Marker>}
+        {telemetry && <CircleMarker
+          center={currentPosition}
           radius={25}
           pathOptions={{ color: '#67e8f9', fillColor: '#22d3ee', fillOpacity: 0.08, weight: 1, dashArray: '4 5' }}
-        />
+        />}
       </MapContainer>
 
       <div className="map-info-panel">
-        <div className="map-info-title"><span className="status-dot cyan" /> SIMULATED GNSS · {tileProvider.name.toUpperCase()}</div>
+        <div className="map-info-title"><span className="status-dot cyan" /> {telemetry ? `${telemetry.data_source.toUpperCase()} GNSS` : 'NO TELEMETRY'} · {tileProvider.name.toUpperCase()}</div>
         <div className="map-info-grid">
-          <span>LAT <b>{formatCoordinate(simulatedDrone[0], 'N', 'S')}</b></span>
-          <span>LNG <b>{formatCoordinate(simulatedDrone[1], 'E', 'W')}</b></span>
-          <span>ALT <b>124.6 m AGL</b></span>
-          <span>GNSS <b className="valid">VALID · RTK FIX</b></span>
+          <span>LAT <b>{telemetry ? formatCoordinate(currentPosition[0], 'N', 'S') : '--'}</b></span>
+          <span>LNG <b>{telemetry ? formatCoordinate(currentPosition[1], 'E', 'W') : '--'}</b></span>
+          <span>ALT <b>{telemetry ? `${telemetry.gnss_position.altitude_m.toFixed(1)} m AGL` : '--'}</b></span>
+          <span>GNSS <b className="valid">{telemetry?.gnss_position.fix ?? 'NO DATA'}</b></span>
         </div>
       </div>
       <div className="selected-waypoint">
@@ -164,7 +175,7 @@ export function MissionMap({ tileProvider = openStreetMapProvider }: { tileProvi
         <strong>{selectedWaypoint.label}</strong>
         <small>{selectedWaypoint.altitude} m AGL</small>
       </div>
-      <div className="map-simulated-stamp">ALL POSITIONS SIMULATED</div>
+      <div className="map-simulated-stamp">{isSimulation ? 'SIMULATION POSITIONS' : telemetry ? 'HARDWARE POSITION' : 'AWAITING POSITION'}</div>
     </div>
   )
 }
