@@ -21,8 +21,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from .models import FaultEvent, SensorStatus, Telemetry
+from .models import DataSource, FaultEvent, NotificationRecord, NotificationSeverity, SensorStatus, Telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,24 @@ CREATE TABLE IF NOT EXISTS system_events (
 
 CREATE INDEX IF NOT EXISTS idx_system_timestamp ON system_events (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_system_type ON system_events (event_type, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL UNIQUE,
+    alert_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    voice_message TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    source TEXT NOT NULL,
+    read INTEGER NOT NULL DEFAULT 0,
+    acknowledged INTEGER NOT NULL DEFAULT 0,
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    mission_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_timestamp ON notifications (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications (read, dismissed, timestamp DESC);
 
 CREATE VIEW IF NOT EXISTS log_records AS
 SELECT
@@ -473,6 +492,157 @@ class LogStore:
         except sqlite3.Error as exc:
             self._fail("record_system_event", exc)
             return False
+
+    def create_notification(
+        self,
+        *,
+        event_id: str,
+        alert_type: str,
+        severity: NotificationSeverity,
+        title: str,
+        message: str,
+        voice_message: str,
+        source: DataSource,
+        mission_id: str | None = None,
+        timestamp: datetime | None = None,
+    ) -> NotificationRecord | None:
+        conn = self._connect()
+        if conn is None:
+            return None
+        moment = timestamp or datetime.now(UTC)
+        notification = NotificationRecord(
+            id=str(uuid4()),
+            event_id=event_id,
+            alert_type=alert_type,
+            severity=severity,
+            title=title,
+            message=message,
+            voice_message=voice_message,
+            timestamp=moment,
+            source=source,
+            mission_id=mission_id,
+        )
+        try:
+            with self._lock:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO notifications (
+                        id, event_id, alert_type, severity, title, message, voice_message,
+                        timestamp, source, read, acknowledged, dismissed, mission_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        notification.id,
+                        notification.event_id,
+                        notification.alert_type,
+                        notification.severity.value,
+                        notification.title,
+                        notification.message,
+                        notification.voice_message,
+                        _iso(notification.timestamp),
+                        notification.source.value,
+                        0,
+                        0,
+                        0,
+                        notification.mission_id,
+                    ),
+                )
+                conn.commit()
+                if cursor.rowcount == 0:
+                    return None
+                return notification
+        except sqlite3.Error as exc:
+            self._fail("create_notification", exc)
+            return None
+
+    def list_notifications(self, *, limit: int = 200, offset: int = 0, include_dismissed: bool = False) -> list[NotificationRecord]:
+        conn = self._connect()
+        if conn is None:
+            return []
+        where = "" if include_dismissed else "WHERE dismissed = 0"
+        try:
+            with self._lock:
+                rows = conn.execute(
+                    f"SELECT * FROM notifications {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                ).fetchall()
+        except sqlite3.Error as exc:
+            self._fail("list_notifications", exc)
+            return []
+        return [self._notification_row(row) for row in rows]
+
+    def unread_notifications_count(self) -> int:
+        conn = self._connect()
+        if conn is None:
+            return 0
+        try:
+            with self._lock:
+                return int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM notifications WHERE read = 0 AND dismissed = 0"
+                    ).fetchone()[0]
+                )
+        except sqlite3.Error as exc:
+            self._fail("unread_notifications_count", exc)
+            return 0
+
+    def mark_notification_read(self, notification_id: str) -> bool:
+        return self._update_notification(notification_id, read=True)
+
+    def dismiss_notification(self, notification_id: str) -> bool:
+        return self._update_notification(notification_id, dismissed=True)
+
+    def acknowledge_notification(self, notification_id: str) -> bool:
+        return self._update_notification(notification_id, acknowledged=True)
+
+    def mark_all_notifications_read(self) -> int:
+        conn = self._connect()
+        if conn is None:
+            return 0
+        try:
+            with self._lock:
+                cursor = conn.execute("UPDATE notifications SET read = 1 WHERE read = 0")
+                conn.commit()
+                return int(cursor.rowcount)
+        except sqlite3.Error as exc:
+            self._fail("mark_all_notifications_read", exc)
+            return 0
+
+    def _update_notification(self, notification_id: str, **updates: bool) -> bool:
+        conn = self._connect()
+        if conn is None:
+            return False
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        values = [1 if value else 0 for value in updates.values()]
+        try:
+            with self._lock:
+                cursor = conn.execute(
+                    f"UPDATE notifications SET {assignments} WHERE id = ?",
+                    [*values, notification_id],
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except sqlite3.Error as exc:
+            self._fail("_update_notification", exc)
+            return False
+
+    @staticmethod
+    def _notification_row(row: sqlite3.Row) -> NotificationRecord:
+        return NotificationRecord(
+            id=row["id"],
+            event_id=row["event_id"],
+            alert_type=row["alert_type"],
+            severity=row["severity"],
+            title=row["title"],
+            message=row["message"],
+            voice_message=row["voice_message"],
+            timestamp=row["timestamp"],
+            source=row["source"],
+            read=bool(row["read"]),
+            acknowledged=bool(row["acknowledged"]),
+            dismissed=bool(row["dismissed"]),
+            mission_id=row["mission_id"],
+        )
 
     @staticmethod
     def _seen_recently(

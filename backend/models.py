@@ -26,9 +26,23 @@ class SensorStatus(StrEnum):
 
 class MissionState(StrEnum):
     READY = "READY"
+    UPLOADED = "UPLOADED"
+    UPLOAD_PENDING = "UPLOAD_PENDING"
+    CONFIRMED_ONBOARD = "CONFIRMED_ONBOARD"
+    EXECUTING = "EXECUTING"
     ACTIVE = "ACTIVE"
     COMPLETED = "COMPLETED"
     ABORTED = "ABORTED"
+
+
+class CommandLifecycle(StrEnum):
+    REQUESTED = "REQUESTED"
+    SENT = "SENT"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    EXECUTING = "EXECUTING"
+    COMPLETED = "COMPLETED"
+    REJECTED = "REJECTED"
+    TIMEOUT = "TIMEOUT"
 
 
 class GnssPosition(BaseModel):
@@ -94,6 +108,7 @@ class FaultEvent(BaseModel):
 
 class Telemetry(BaseModel):
     timestamp: datetime
+    packet_sequence: int | None = Field(default=None, ge=0)
     data_source: DataSource
     flight_mode: FlightMode
     gnss_position: GnssPosition
@@ -109,6 +124,8 @@ class Telemetry(BaseModel):
 class MissionWaypoint(BaseModel):
     id: str
     label: str
+    latitude_deg: float = Field(ge=-90, le=90)
+    longitude_deg: float = Field(ge=-180, le=180)
     altitude_m: float = Field(ge=0, le=20_000)
     status: str
 
@@ -118,6 +135,41 @@ class MissionResponse(BaseModel):
     state: MissionState
     waypoints: list[MissionWaypoint]
     completion_percent: float = Field(ge=0, le=100)
+
+
+class MissionLimits(BaseModel):
+    max_relative_altitude_m: float = Field(gt=0, le=20_000)
+
+
+class NotificationSeverity(StrEnum):
+    CRITICAL = "CRITICAL"
+    WARNING = "WARNING"
+    INFORMATION = "INFORMATION"
+    SUCCESS = "SUCCESS"
+
+
+class NotificationRecord(BaseModel):
+    id: str
+    event_id: str
+    alert_type: str
+    severity: NotificationSeverity
+    title: str
+    message: str
+    voice_message: str
+    timestamp: datetime
+    source: DataSource
+    read: bool = False
+    acknowledged: bool = False
+    dismissed: bool = False
+    mission_id: str | None = None
+
+
+class NotificationPolicy(BaseModel):
+    low_battery_warning_percent: float = Field(default=30, ge=0, le=100)
+    low_battery_critical_percent: float = Field(default=20, ge=0, le=100)
+    low_battery_hysteresis_percent: float = Field(default=3, ge=0, le=20)
+    alert_cooldown_s: int = Field(default=20, ge=1, le=3600)
+    announce_recovery: bool = True
 
 
 class LogEntry(BaseModel):

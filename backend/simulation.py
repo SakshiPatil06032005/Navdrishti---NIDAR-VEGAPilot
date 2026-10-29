@@ -70,6 +70,7 @@ class SimulationProvider:
 
         return Telemetry(
             timestamp=now,
+            packet_sequence=second + 1,
             data_source=DataSource.SIMULATION,
             flight_mode=FlightMode.MISSION,
             gnss_position=GnssPosition(
