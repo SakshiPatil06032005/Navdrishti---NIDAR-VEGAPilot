@@ -49,6 +49,20 @@ class SimulationProvider:
         self.started_at = monotonic()
         self._cached: Telemetry | None = None
         self._cached_second: int | None = None
+        self._injected_faults: set[str] = set()
+
+    def inject_fault(self, fault: str) -> None:
+        if fault not in {"gnss", "battery", "communication"}:
+            raise ValueError("Unsupported simulation fault.")
+        self._injected_faults.add(fault)
+        self._cached = None
+
+    def clear_faults(self) -> None:
+        self._injected_faults.clear()
+        self._cached = None
+
+    def has_fault(self, fault: str) -> bool:
+        return fault in self._injected_faults
 
     def latest(self) -> Telemetry:
         """Return the packet for the current second, building it once per second."""
@@ -68,7 +82,13 @@ class SimulationProvider:
         now = datetime.now(UTC)
 
         health = self._health(second)
+        if "gnss" in self._injected_faults:
+            health = health.model_copy(update={"gnss": SensorStatus.FAILED})
+        if "battery" in self._injected_faults:
+            health = health.model_copy(update={"battery": SensorStatus.FAILED})
         link = self._link(second)
+        if "communication" in self._injected_faults:
+            link = TelemetryLinkStatus(connected=False, signal_strength_percent=0.0, latency_ms=0.0)
 
         return Telemetry(
             timestamp=now,
@@ -101,7 +121,7 @@ class SimulationProvider:
             battery=BatteryData(
                 voltage_v=voltage,
                 current_a=8.4,
-                remaining_percent=max(0, 78 - elapsed / 180),
+                remaining_percent=8.0 if "battery" in self._injected_faults else max(0, 78 - elapsed / 180),
             ),
             sensor_health=health,
             telemetry_link=link,

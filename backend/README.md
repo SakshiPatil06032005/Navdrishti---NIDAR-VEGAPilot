@@ -66,6 +66,12 @@ Endpoints:
 - `GET /api/health`
 - `GET /api/telemetry/latest`
 - `GET /api/mission`
+- `GET /api/missions` — saved five-waypoint mission drafts
+- `PUT /api/missions/{mission_id}` — save a validated mission draft
+- `POST /api/missions/{mission_id}/simulation-upload` — simulation-only upload with acknowledgement
+- `POST /api/missions/{mission_id}/simulation-command?command=start|pause|resume|abort|rth|standby|reset&command_id=...` — simulation-only validated mission controls
+- `POST /api/simulation/faults?fault=gnss|battery|communication` — inject one simulation fault; unavailable in hardware mode
+- `DELETE /api/simulation/faults` — clear injected simulation faults and record recovery telemetry
 - `GET /api/logs` — the most recent stored records as plain log lines
 - `GET /api/logs/records` — searchable, filterable records
 - `GET /api/logs/history` — battery voltage and altitude series for the charts
@@ -107,9 +113,15 @@ same filters:
   whole day
 - `sensor` — `imu`, `gnss`, `barometer`, `battery` or `link`
 - `severity` — `INFO`, `WARNING`, `ERROR` or `CRITICAL`
-- `event_type` — `TELEMETRY`, `FAULT` or `SYSTEM`
+- `category` — `Telemetry`, `Mission`, `Waypoint`, `Sensor`, `Battery`,
+  `Communication`, `Failsafe` or `System`
+- `event_type` — legacy raw event type (`TELEMETRY`, `FAULT`, `SYSTEM` or `MISSION`)
 - `data_source` — `simulation` or `hardware`
 - `search` — free text match on the message or the fault code
+
+Mission events are read from the existing `mission_events` table and unioned
+into the log query; source rows are not copied or re-recorded. CSV export uses
+the same filters as the records endpoint.
 
 `/api/logs/records` also accepts `limit` and `offset`.
 

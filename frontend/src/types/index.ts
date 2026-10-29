@@ -4,6 +4,7 @@ export type LogQuery = {
   sensor?: string
   severity?: string
   event_type?: string
+  category?: string
   data_source?: string
   search?: string
   limit?: number
@@ -15,6 +16,7 @@ export type LogRecord = {
   timestamp: string
   recorded_at: string
   event_type: string
+  category: string
   severity: string
   data_source: string
   sensor: string | null
@@ -53,6 +55,7 @@ export type LogStats = {
   telemetry: number
   faults: number
   system: number
+  mission: number
   warnings: number
   errors: number
   connection_losses: number

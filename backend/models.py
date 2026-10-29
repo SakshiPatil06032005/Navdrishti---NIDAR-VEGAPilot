@@ -32,11 +32,16 @@ class SensorStatus(StrEnum):
 
 class MissionState(StrEnum):
     READY = "READY"
+    STANDBY = "STANDBY"
     UPLOADED = "UPLOADED"
     UPLOAD_PENDING = "UPLOAD_PENDING"
     CONFIRMED_ONBOARD = "CONFIRMED_ONBOARD"
     EXECUTING = "EXECUTING"
     ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    RETURNING_HOME = "RETURNING_HOME"
+    AT_HOME = "AT_HOME"
+    FAULT = "FAULT"
     COMPLETED = "COMPLETED"
     ABORTED = "ABORTED"
 
@@ -137,10 +142,13 @@ class MissionWaypoint(BaseModel):
 
 
 class MissionResponse(BaseModel):
+    id: str
     name: str
     state: MissionState
     waypoints: list[MissionWaypoint]
     completion_percent: float = Field(ge=0, le=100)
+    home_latitude_deg: float | None = Field(default=None, ge=-90, le=90)
+    home_longitude_deg: float | None = Field(default=None, ge=-180, le=180)
 
 
 class MissionLimits(BaseModel):
@@ -191,6 +199,7 @@ class LogRecordModel(BaseModel):
     timestamp: datetime
     recorded_at: datetime
     event_type: str
+    category: str = "System"
     severity: str
     data_source: str
     sensor: str | None = None
@@ -229,6 +238,7 @@ class LogStatsResponse(BaseModel):
     telemetry: int = 0
     faults: int = 0
     system: int = 0
+    mission: int = 0
     warnings: int = 0
     errors: int = 0
     connection_losses: int = 0

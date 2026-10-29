@@ -43,7 +43,7 @@ type FilterState = {
   end: string
   sensor: string
   severity: string
-  event_type: string
+  category: string
   data_source: string
 }
 
@@ -53,7 +53,7 @@ const EMPTY_FILTERS: FilterState = {
   end: '',
   sensor: '',
   severity: '',
-  event_type: '',
+  category: '',
   data_source: '',
 }
 
@@ -75,10 +75,15 @@ const SEVERITY_OPTIONS = [
 ]
 
 const EVENT_TYPE_OPTIONS = [
-  { value: '', label: 'All event types' },
-  { value: 'TELEMETRY', label: 'TELEMETRY' },
-  { value: 'FAULT', label: 'FAULT' },
-  { value: 'SYSTEM', label: 'SYSTEM' },
+  { value: '', label: 'All categories' },
+  { value: 'Telemetry', label: 'Telemetry' },
+  { value: 'Mission', label: 'Mission' },
+  { value: 'Waypoint', label: 'Waypoint' },
+  { value: 'Sensor', label: 'Sensor' },
+  { value: 'Battery', label: 'Battery' },
+  { value: 'Communication', label: 'Communication' },
+  { value: 'Failsafe', label: 'Failsafe' },
+  { value: 'System', label: 'System' },
 ]
 
 const DATA_SOURCE_OPTIONS = [
@@ -180,11 +185,11 @@ export function LogsPage() {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
 
   const query = useMemo<LogQuery>(() => ({
-    start: filters.start || undefined,
-    end: filters.end || undefined,
+    start: filters.start ? new Date(filters.start).toISOString() : undefined,
+    end: filters.end ? new Date(filters.end).toISOString() : undefined,
     sensor: filters.sensor || undefined,
     severity: filters.severity || undefined,
-    event_type: filters.event_type || undefined,
+    category: filters.category || undefined,
     data_source: filters.data_source || undefined,
     search: filters.search.trim() || undefined,
     limit: PAGE_SIZE,
@@ -291,7 +296,7 @@ export function LogsPage() {
       )}
 
       <div className="summary-grid">
-        <SummaryCard label="Stored records" value={String(stats?.total ?? 0)} detail={`${stats?.telemetry ?? 0} telemetry · ${stats?.system ?? 0} system`} icon={List} />
+        <SummaryCard label="Stored records" value={String(stats?.total ?? 0)} detail={`${stats?.telemetry ?? 0} telemetry · ${stats?.mission ?? 0} mission · ${stats?.system ?? 0} system`} icon={List} />
         <SummaryCard label="Fault events" value={String(stats?.faults ?? 0)} detail={`${stats?.warnings ?? 0} warnings raised`} icon={AlertTriangle} tone="amber" />
         <SummaryCard label="Errors" value={String(stats?.errors ?? 0)} detail="Error and critical severity" icon={AlertOctagon} tone="red" />
         <SummaryCard label="Connection losses" value={String(stats?.connection_losses ?? 0)} detail="Telemetry link dropouts" icon={WifiOff} tone="red" />
@@ -304,12 +309,12 @@ export function LogsPage() {
             <div className="logs-input-wrap"><Search size={12} /><input value={filters.search} onChange={(event) => updateFilter('search', event.target.value)} placeholder="message or fault code" /></div>
           </label>
           <label className="logs-field">
-            <span>From date</span>
-            <input type="date" value={filters.start} onChange={(event) => updateFilter('start', event.target.value)} />
+            <span>From date & time</span>
+              <input type="datetime-local" value={filters.start} onChange={(event) => updateFilter('start', event.target.value)} />
           </label>
           <label className="logs-field">
-            <span>To date</span>
-            <input type="date" value={filters.end} onChange={(event) => updateFilter('end', event.target.value)} />
+            <span>To date & time</span>
+            <input type="datetime-local" value={filters.end} onChange={(event) => updateFilter('end', event.target.value)} />
           </label>
           <label className="logs-field">
             <span>Sensor</span>
@@ -318,14 +323,14 @@ export function LogsPage() {
             </select>
           </label>
           <label className="logs-field">
-            <span>Fault severity</span>
+            <span>Severity</span>
             <select value={filters.severity} onChange={(event) => updateFilter('severity', event.target.value)}>
               {SEVERITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           <label className="logs-field">
-            <span>Event type</span>
-            <select value={filters.event_type} onChange={(event) => updateFilter('event_type', event.target.value)}>
+            <span>Event category</span>
+            <select value={filters.category} onChange={(event) => updateFilter('category', event.target.value)}>
               {EVENT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
@@ -336,7 +341,7 @@ export function LogsPage() {
             </select>
           </label>
           <div className="logs-filter-actions">
-            <button className="outline-button" onClick={resetFilters}><X size={13} /> RESET</button>
+            <button className="outline-button" onClick={resetFilters}><X size={13} /> CLEAR FILTERS</button>
             <button className="outline-button" onClick={() => { void load() }}><RefreshCw size={13} /> REFRESH</button>
             <button className="primary-button" onClick={() => { void handleExport() }} disabled={exporting}>
               <Download size={13} /> {exporting ? 'EXPORTING' : 'EXPORT CSV'}

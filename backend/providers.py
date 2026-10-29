@@ -82,6 +82,15 @@ class SimulationTelemetryProvider(TelemetryProvider):
     def latest(self) -> Telemetry:
         return self._provider.latest()
 
+    def inject_fault(self, fault: str) -> None:
+        self._provider.inject_fault(fault)
+
+    def clear_faults(self) -> None:
+        self._provider.clear_faults()
+
+    def has_fault(self, fault: str) -> bool:
+        return self._provider.has_fault(fault)
+
     async def diagnostics(self) -> list[DiagnosticMessage]:
         packet = self.latest()
         return [

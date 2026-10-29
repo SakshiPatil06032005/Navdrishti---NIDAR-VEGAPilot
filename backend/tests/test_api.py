@@ -1,6 +1,7 @@
 """Tests for the log API endpoints: retrieving, filtering, charting and exporting."""
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +10,7 @@ from backend.database import LogStore
 from backend.notifications import NotificationManager
 from backend.recorder import TelemetryRecorder
 from backend.settings import SettingsStore
+from backend.models import MissionState
 
 
 @pytest.fixture
@@ -17,7 +19,11 @@ def client(tmp_path, monkeypatch):
     from backend import main
 
     test_store = LogStore(tmp_path / "api.db")
+    from backend.mission import MissionManager, MissionStore
+    test_missions = MissionStore(tmp_path / "missions.db")
     monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "mission_store", test_missions)
+    monkeypatch.setattr(main, "mission_manager", MissionManager(test_missions))
     monkeypatch.setattr(main, "notification_manager", NotificationManager(test_store))
     monkeypatch.setattr(main, "recorder", TelemetryRecorder(test_store, main.notification_manager))
     with TestClient(main.app) as test_client:
@@ -95,6 +101,84 @@ def test_mission_api_rejects_invalid_coordinates_and_exposes_route_length(client
     payload["waypoints"][0]["latitude_deg"] = 91
     response = client.put(f"/api/missions/{mission.id}", json=payload)
     assert response.status_code == 422
+
+
+def test_simulation_control_endpoints_validate_and_acknowledge_commands(client):
+    from backend import main
+    from backend.providers import SimulationTelemetryProvider
+
+    main.provider = SimulationTelemetryProvider()
+    mission = main.mission_manager.selected()
+    mission = main.mission_store.save(mission.model_copy(update={
+        "state": MissionState.READY,
+        "home_latitude_deg": 18.5204,
+        "home_longitude_deg": 73.8567,
+    }))
+    reset = client.post(
+        f"/api/missions/{mission.id}/simulation-command",
+        params={"command": "reset", "command_id": str(uuid4())},
+    )
+    assert reset.status_code == 200
+    upload = client.post(
+        f"/api/missions/{mission.id}/simulation-upload",
+        params={"command_id": str(uuid4())},
+    )
+    assert upload.status_code == 200
+    assert upload.json()["state"] == "UPLOADED"
+    start = client.post(
+        f"/api/missions/{mission.id}/simulation-command",
+        params={"command": "start", "command_id": str(uuid4())},
+    )
+    assert start.json()["state"] == "EXECUTING"
+    pause = client.post(
+        f"/api/missions/{mission.id}/simulation-command",
+        params={"command": "pause", "command_id": str(uuid4())},
+    )
+    assert pause.json()["state"] == "PAUSED"
+    resume = client.post(
+        f"/api/missions/{mission.id}/simulation-command",
+        params={"command": "resume", "command_id": str(uuid4())},
+    )
+    assert resume.json()["state"] == "EXECUTING"
+    rth = client.post(
+        f"/api/missions/{mission.id}/simulation-command",
+        params={"command": "rth", "command_id": str(uuid4())},
+    )
+    assert rth.json()["state"] == "RETURNING_HOME"
+    abort = client.post(
+        f"/api/missions/{mission.id}/simulation-command",
+        params={"command": "abort", "command_id": str(uuid4())},
+    )
+    assert abort.json()["state"] == "ABORTED"
+    assert main.mission_store.events(mission.id)[-1].code == "MISSION_ABORT"
+
+
+def test_simulation_fault_injection_persists_faults_and_recovery(client):
+    from backend import main
+    from backend.providers import SimulationTelemetryProvider
+
+    main.provider = SimulationTelemetryProvider()
+    gnss = client.post("/api/simulation/faults", params={"fault": "gnss"})
+    assert gnss.status_code == 200
+    packet = client.get("/api/telemetry/latest").json()
+    assert packet["sensor_health"]["gnss"] == "FAILED"
+    assert packet["fault_events"][0]["code"] == "GNSS_DEGRADED"
+    assert client.get("/api/notifications/unread-count").json()["unread_count"] >= 1
+    records = client.get("/api/logs/records", params={"event_type": "fault"}).json()
+    assert any(record["code"] == "GNSS_DEGRADED" for record in records["records"])
+
+    battery = client.post("/api/simulation/faults", params={"fault": "battery"})
+    assert battery.status_code == 200
+    assert client.get("/api/telemetry/latest").json()["battery"]["remaining_percent"] == 8.0
+    communication = client.post("/api/simulation/faults", params={"fault": "communication"})
+    assert communication.status_code == 200
+    assert client.get("/api/telemetry/latest").json()["telemetry_link"]["connected"] is False
+
+    cleared = client.delete("/api/simulation/faults")
+    assert cleared.status_code == 200
+    recovered = client.get("/api/telemetry/latest").json()
+    assert recovered["sensor_health"]["gnss"] == "VALID"
+    assert recovered["telemetry_link"]["connected"] is True
 
 
 def test_failsafe_policy_and_status_are_inspection_only(client, tmp_path, monkeypatch):
@@ -196,6 +280,40 @@ def test_records_endpoint_filters_by_event_type_and_severity(client, make_packet
     assert response.json()["total"] == 1
 
 
+def test_unified_logs_filter_mission_category_and_export_same_results(client):
+    from backend import main
+
+    mission = main.mission_manager.selected()
+    main.mission_store.event(mission.id, "INFO", "MISSION_START", "Mission started", data_source="simulation")
+    main.mission_store.event(mission.id, "INFO", "WAYPOINT_REACHED", "Reached WP 01", data_source="simulation")
+    main.store.record_system_event("CONNECTION_LOST", "WARNING", "Link lost", "simulation", "link")
+
+    response = client.get("/api/logs/records", params={
+        "category": "Mission",
+        "severity": "INFO",
+        "data_source": "simulation",
+        "search": "Mission started",
+        "limit": 1,
+        "offset": 0,
+    })
+    assert response.status_code == 200
+    result = response.json()
+    assert result["total"] == 1
+    assert result["records"][0]["category"] == "Mission"
+    assert result["records"][0]["code"] == "MISSION_START"
+
+    csv_response = client.get("/api/logs/export.csv", params={
+        "category": "Mission",
+        "severity": "INFO",
+        "data_source": "simulation",
+        "search": "Mission started",
+    })
+    assert csv_response.status_code == 200
+    assert "MISSION_START" in csv_response.text
+    assert "WAYPOINT_REACHED" not in csv_response.text
+    assert "CONNECTION_LOST" not in csv_response.text
+
+
 def test_records_endpoint_rejects_an_invalid_date(client):
     response = client.get("/api/logs/records", params={"start": "not-a-date"})
 
@@ -241,7 +359,7 @@ def test_export_endpoint_returns_a_csv_attachment(client, make_packet):
     assert response.headers["content-type"].startswith("text/csv")
     assert "attachment" in response.headers["content-disposition"]
     lines = response.text.strip().splitlines()
-    assert lines[0].startswith("timestamp,recorded_at,event_type,severity,data_source")
+    assert lines[0].startswith("timestamp,recorded_at,event_type,category,severity,data_source")
     assert len(lines) >= 4
     assert all(",simulation," in line for line in lines[1:])
 

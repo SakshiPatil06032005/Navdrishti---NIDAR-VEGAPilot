@@ -98,3 +98,37 @@ def test_waypoint_coordinates_and_altitude_are_validated(tmp_path, monkeypatch):
         manager.store.save(invalid)
     with pytest.raises(ValueError):
         MissionWaypoint(id="bad", label="Bad", latitude_deg=91, longitude_deg=0, altitude_m=10, status="pending")
+
+
+def test_saving_existing_mission_updates_home_position(tmp_path):
+    store = MissionStore(tmp_path / "mission.db")
+    mission = store.list_missions()[0]
+    updated = mission.model_copy(update={
+        "home_latitude_deg": 18.5204,
+        "home_longitude_deg": 73.8567,
+    })
+
+    store.save(updated)
+
+    saved = store.get(mission.id)
+    assert saved.home_latitude_deg == 18.5204
+    assert saved.home_longitude_deg == 73.8567
+
+
+def test_simulation_pause_resume_rth_and_standby_transitions(tmp_path):
+    manager = MissionManager(MissionStore(tmp_path / "mission.db"))
+    mission = manager.selected()
+    manager.store.save(mission.model_copy(update={"home_latitude_deg": 18.52, "home_longitude_deg": 73.85}))
+
+    assert manager.execute("standby", "cmd-standby", hardware=False).state is MissionState.STANDBY
+    with pytest.raises(ValueError, match="Cannot start"):
+        manager.execute("start", "cmd-start-standby", hardware=False)
+    assert manager.execute("reset", "cmd-reset", hardware=False).state is MissionState.READY
+    manager.execute("upload", "cmd-upload-controls", hardware=False)
+    manager.execute("start", "cmd-start-controls", hardware=False)
+    assert manager.execute("pause", "cmd-pause", hardware=False).state is MissionState.PAUSED
+    assert manager.tick() is None
+    assert manager.execute("resume", "cmd-resume", hardware=False).state is MissionState.EXECUTING
+    assert manager.execute("rth", "cmd-rth", hardware=False).state is MissionState.RETURNING_HOME
+    assert manager.execute("abort", "cmd-abort-controls", hardware=False).state is MissionState.ABORTED
+    assert manager.tick() is None

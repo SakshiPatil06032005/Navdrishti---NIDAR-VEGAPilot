@@ -10,6 +10,7 @@ function buildParams(query: LogQuery): URLSearchParams {
     ['sensor', query.sensor],
     ['severity', query.severity],
     ['event_type', query.event_type],
+    ['category', query.category],
     ['data_source', query.data_source],
     ['search', query.search],
     ['limit', query.limit],

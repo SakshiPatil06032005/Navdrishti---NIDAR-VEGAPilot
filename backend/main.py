@@ -62,6 +62,19 @@ mission_clients: set[WebSocket] = set()
 RECORD_INTERVAL_S = 1.0
 
 
+def _mission_packet(packet: Telemetry) -> Telemetry:
+    latitude, longitude, altitude = mission_manager.simulated_position()
+    return packet.model_copy(update={
+        "gnss_position": packet.gnss_position.model_copy(update={
+            "latitude_deg": latitude,
+            "longitude_deg": longitude,
+            "altitude_m": max(packet.gnss_position.altitude_m, altitude),
+        }),
+        "barometer": packet.barometer.model_copy(update={"relative_altitude_m": max(packet.barometer.relative_altitude_m, altitude)}),
+        "mission_status": mission_manager.status(),
+    })
+
+
 async def _record_loop() -> None:
     """Persist one telemetry packet per second for the lifetime of the app."""
     while True:
@@ -80,7 +93,7 @@ async def _record_loop() -> None:
                     )
                     if notification:
                         await _broadcast_notification_event(notification)
-                packet = packet.model_copy(update={"mission_status": mission_manager.status()})
+                packet = _mission_packet(packet)
                 policy = settings_store.load().notifications
                 recorder.set_notification_policy(policy)
                 created = recorder.record(packet)
@@ -176,6 +189,7 @@ def _build_filter(
     event_type: str | None,
     data_source: str | None,
     search: str | None,
+    category: str | None = None,
 ) -> LogFilter:
     """Build a normalised log filter from the query parameters."""
     return LogFilter(
@@ -184,6 +198,7 @@ def _build_filter(
         sensor=sensor,
         severity=severity,
         event_type=event_type,
+        category=category,
         data_source=data_source,
         search=search,
     ).normalised()
@@ -377,15 +392,72 @@ async def latest_telemetry() -> Telemetry:
     packet = provider.latest()
     if packet is None:
         raise HTTPException(status_code=503, detail="No decoded telemetry packet is available.")
-    return packet
+    return _mission_packet(packet)
+
+
+@app.post("/api/simulation/faults")
+async def inject_simulation_fault(
+    fault: str = Query(..., pattern="^(gnss|battery|communication)$"),
+) -> dict[str, str]:
+    if provider.name != "simulation" or not isinstance(provider, SimulationTelemetryProvider):
+        raise HTTPException(status_code=409, detail="Simulation fault injection is unavailable in hardware mode.")
+    already_active = provider.has_fault(fault)
+    provider.inject_fault(fault)
+    packet = _mission_packet(provider.latest())
+    recorder.set_notification_policy(settings_store.load().notifications)
+    created = recorder.record(packet)
+    if not already_active and not any(item.alert_type in {
+        "GNSS_FAULT", "LOW_BATTERY_WARNING", "LOW_BATTERY_CRITICAL", "TELEMETRY_LOST"
+    } for item in created):
+        details = {
+            "gnss": ("GNSS_FAULT", NotificationSeverity.WARNING, "GNSS signal lost", "Warning. GNSS signal lost."),
+            "battery": ("LOW_BATTERY_CRITICAL", NotificationSeverity.CRITICAL, "Critical battery condition", "Critical alert. Drone battery level is critical."),
+            "communication": ("TELEMETRY_LOST", NotificationSeverity.WARNING, "Telemetry connection lost", "Warning. Telemetry connection lost."),
+        }[fault]
+        fallback = notification_manager.emit(
+            event_id=f"simulation:fault-injection:{fault}:{uuid4()}",
+            alert_type=details[0],
+            severity=details[1],
+            title=details[2],
+            message=f"Simulated {fault} fault injected.",
+            voice_message=details[3],
+            source=DataSource.SIMULATION,
+        )
+        if fallback:
+            created.append(fallback)
+    for notification in created:
+        await _broadcast_notification_event(notification)
+    await _broadcast_telemetry_packet(packet)
+    return {"fault": fault, "status": "injected"}
+
+
+@app.delete("/api/simulation/faults")
+async def clear_simulation_faults() -> dict[str, str]:
+    if provider.name != "simulation" or not isinstance(provider, SimulationTelemetryProvider):
+        raise HTTPException(status_code=409, detail="Simulation fault recovery is unavailable in hardware mode.")
+    provider.clear_faults()
+    packet = _mission_packet(provider.latest())
+    recorder.set_notification_policy(settings_store.load().notifications)
+    created = recorder.record(packet)
+    for notification in created:
+        await _broadcast_notification_event(notification)
+    await _broadcast_telemetry_packet(packet)
+    return {"status": "cleared"}
 
 
 @app.get("/api/mission", response_model=MissionResponse)
 async def mission() -> MissionResponse:
     current = mission_manager.selected()
     status = mission_manager.status(current)
-    return MissionResponse(name=current.name, state=status.state, waypoints=current.waypoints,
-                           completion_percent=status.completed_waypoints / status.total_waypoints * 100)
+    return MissionResponse(
+        id=current.id,
+        name=current.name,
+        state=status.state,
+        waypoints=current.waypoints,
+        completion_percent=status.completed_waypoints / status.total_waypoints * 100,
+        home_latitude_deg=current.home_latitude_deg,
+        home_longitude_deg=current.home_longitude_deg,
+    )
 
 
 @app.get("/api/missions", response_model=list[MissionDraft])
@@ -465,13 +537,45 @@ async def mission_commands(mission_id: str) -> list[MissionCommandResult]:
 @app.post("/api/missions/{mission_id}/commands/{command}", response_model=MissionCommandResult)
 async def mission_command(mission_id: str, command: str, command_id: str = Query(..., min_length=8)) -> MissionCommandResult:
     if mission_id != mission_manager.selected_id:
-        raise HTTPException(status_code=409, detail="Select the mission before issuing commands.")
+        try:
+            mission_manager.select(mission_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     try:
         result = mission_manager.execute(command, command_id, provider.name != "simulation")
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _broadcast_mission_event(result)
+    if provider.name == "simulation":
+        notification = notification_manager.from_mission_event(
+            code=f"MISSION_{command.upper()}",
+            message=result.message,
+            source=DataSource.SIMULATION,
+            mission_id=result.mission_id,
+            state=result.state,
+            event_id=f"simulation:command:{result.command_id}",
+        )
+        if notification:
+            await _broadcast_notification_event(notification)
     return result
+
+
+@app.post("/api/missions/{mission_id}/simulation-command", response_model=MissionCommandResult)
+async def simulation_command(
+    mission_id: str,
+    command: str = Query(..., pattern="^(start|pause|resume|abort|rth|standby|reset)$"),
+    command_id: str = Query(..., min_length=8),
+) -> MissionCommandResult:
+    if provider.name != "simulation":
+        raise HTTPException(status_code=409, detail="Simulation commands are unavailable in hardware mode.")
+    return await mission_command(mission_id, command, command_id)
+
+
+@app.post("/api/missions/{mission_id}/simulation-upload", response_model=MissionCommandResult)
+async def simulation_upload(mission_id: str, command_id: str = Query(..., min_length=8)) -> MissionCommandResult:
+    if provider.name != "simulation":
+        raise HTTPException(status_code=409, detail="Simulation upload is unavailable in hardware mode.")
+    return await mission_command(mission_id, "upload", command_id)
 
 
 @app.get("/api/missions/commands/{command_id}", response_model=MissionCommandResult)
@@ -549,10 +653,21 @@ async def _broadcast_notification_event(notification: NotificationRecord) -> Non
         mission_clients.discard(client)
 
 
+async def _broadcast_telemetry_packet(packet: Telemetry) -> None:
+    stale_clients: list[WebSocket] = []
+    for client in mission_clients:
+        try:
+            await client.send_json(packet.model_dump(mode="json"))
+        except Exception:
+            stale_clients.append(client)
+    for client in stale_clients:
+        mission_clients.discard(client)
+
+
 @app.get("/api/logs", response_model=list[LogEntry])
 def logs() -> list[LogEntry]:
     """Return the most recent stored records as plain log lines."""
-    _, rows = store.query_records(LogFilter().normalised(), limit=100, offset=0)
+    _, rows = store.query_records(LogFilter().normalised(), limit=100, offset=0, mission_db_path=mission_store.path)
     entries = [
         LogEntry(
             timestamp=row["timestamp"],
@@ -581,15 +696,16 @@ def log_records(
     end: str | None = Query(None, description="ISO-8601 end date or date-time"),
     sensor: str | None = Query(None, description="Sensor attributed to the record"),
     severity: str | None = Query(None, description="INFO, WARNING, ERROR or CRITICAL"),
-    event_type: str | None = Query(None, description="TELEMETRY, FAULT or SYSTEM"),
+    event_type: str | None = Query(None, description="Legacy event type"),
+    category: str | None = Query(None, description="Telemetry, Mission, Waypoint, Sensor, Battery, Communication, Failsafe or System"),
     data_source: str | None = Query(None, description="simulation or hardware"),
     search: str | None = Query(None, description="Free text match on message or code"),
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ) -> LogRecordsResponse:
     """Return stored telemetry, fault and system records matching the filters."""
-    filters = _build_filter(start, end, sensor, severity, event_type, data_source, search)
-    total, rows = store.query_records(filters, limit, offset)
+    filters = _build_filter(start, end, sensor, severity, event_type, data_source, search, category)
+    total, rows = store.query_records(filters, limit, offset, mission_db_path=mission_store.path)
     return LogRecordsResponse(
         total=total,
         limit=limit,
@@ -621,13 +737,14 @@ def log_stats(
     end: str | None = Query(None, description="ISO-8601 end date or date-time"),
     sensor: str | None = Query(None, description="Sensor attributed to the record"),
     severity: str | None = Query(None, description="INFO, WARNING, ERROR or CRITICAL"),
-    event_type: str | None = Query(None, description="TELEMETRY, FAULT or SYSTEM"),
+    event_type: str | None = Query(None, description="Legacy event type"),
+    category: str | None = Query(None, description="Unified event category"),
     data_source: str | None = Query(None, description="simulation or hardware"),
     search: str | None = Query(None, description="Free text match on message or code"),
 ) -> LogStatsResponse:
     """Return record counts for the dashboard summary cards."""
-    filters = _build_filter(start, end, sensor, severity, event_type, data_source, search)
-    stats = store.query_stats(filters)
+    filters = _build_filter(start, end, sensor, severity, event_type, data_source, search, category)
+    stats = store.query_stats(filters, mission_db_path=mission_store.path)
     return LogStatsResponse(**stats, database_error=store.last_error)
 
 
@@ -637,13 +754,14 @@ def export_logs_csv(
     end: str | None = Query(None, description="ISO-8601 end date or date-time"),
     sensor: str | None = Query(None, description="Sensor attributed to the record"),
     severity: str | None = Query(None, description="INFO, WARNING, ERROR or CRITICAL"),
-    event_type: str | None = Query(None, description="TELEMETRY, FAULT or SYSTEM"),
+    event_type: str | None = Query(None, description="Legacy event type"),
+    category: str | None = Query(None, description="Unified event category"),
     data_source: str | None = Query(None, description="simulation or hardware"),
     search: str | None = Query(None, description="Free text match on message or code"),
 ) -> Response:
     """Export every matching record as CSV."""
-    filters = _build_filter(start, end, sensor, severity, event_type, data_source, search)
-    payload = store.export_csv(filters)
+    filters = _build_filter(start, end, sensor, severity, event_type, data_source, search, category)
+    payload = store.export_csv(filters, mission_db_path=mission_store.path)
     filename = f"vega-pilot-logs-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.csv"
     headers = {
         "Content-Disposition": f'attachment; filename="{filename}"',
@@ -664,6 +782,7 @@ async def telemetry_socket(websocket: WebSocket) -> None:
         while True:
             packet = provider.latest()
             if packet is not None:
+                packet = _mission_packet(packet)
                 await websocket.send_json(packet.model_dump(mode="json"))
             else:
                 await websocket.send_json(

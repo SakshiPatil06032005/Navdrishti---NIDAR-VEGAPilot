@@ -240,6 +240,13 @@ class NotificationManager:
             "MISSION_ABORT": ("Mission aborted", NotificationSeverity.WARNING, "Mission aborted by operator."),
             "MISSION_ABORT_CONFIRMED": ("Mission aborted", NotificationSeverity.WARNING, "Mission aborted by operator."),
             "MISSION_COMPLETED": ("Mission completed", NotificationSeverity.SUCCESS, "Mission completed."),
+            "MISSION_RTH": ("Return to home requested", NotificationSeverity.WARNING, "Warning. Return to home requested."),
+            "MISSION_AT_HOME": ("Aircraft at home", NotificationSeverity.SUCCESS, "Information. Aircraft reached home."),
+            "MISSION_PAUSE": ("Simulation paused", NotificationSeverity.INFORMATION, "Information. Simulation paused."),
+            "MISSION_RESUME": ("Simulation resumed", NotificationSeverity.INFORMATION, "Information. Simulation resumed."),
+            "MISSION_STANDBY": ("Simulation standby", NotificationSeverity.INFORMATION, "Information. Simulation is in standby."),
+            "MISSION_RESET": ("Simulation reset", NotificationSeverity.INFORMATION, "Information. Simulation reset."),
+            "MISSION_UPLOAD": ("Mission uploaded", NotificationSeverity.SUCCESS, "Information. Mission uploaded to the simulator."),
             "FAILSAFE_ACTIVATED": ("Failsafe activated", NotificationSeverity.CRITICAL, "Critical alert. Failsafe activated."),
         }
         if code not in mapping:

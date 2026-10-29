@@ -15,14 +15,33 @@ import {
   Terminal,
   Timer,
 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { MissionMap } from '../components/MissionMap'
 import { FlightTimelinePanel, LiveTelemetryPanel, MissionProgressPanel } from '../components/MissionPanels'
 import { Panel, StatusDot, SummaryCard } from '../components/Panel'
 import { PositionAltitudePanel, SensorHealthPanel } from '../components/TelemetryPanels'
 import { useTelemetry, type ConnectionState } from '../services/telemetry'
+import { fetchSelectedMission, simulationCommand, uploadMissionToSimulator, type SelectedMission } from '../services/missions'
+import { clearSimulationFaults, injectSimulationFault } from '../services/missions'
+import { useNotificationCenter } from '../services/notificationCenter'
+
+function commandId() {
+  return `${Date.now()}-${crypto.randomUUID()}`
+}
 
 export function DashboardPage() {
   const { telemetry, connectionState, stale, history, ageMs, error } = useTelemetry()
+  const { toast, speechAvailable, speechBlocked, voice, unlockVoice, testVoice, updateVoice } = useNotificationCenter()
+  const [selectedMission, setSelectedMission] = useState<SelectedMission | null>(null)
+  const [busyCommand, setBusyCommand] = useState<string | null>(null)
+  const [commandMessage, setCommandMessage] = useState<string | null>(null)
+  const [commandError, setCommandError] = useState<string | null>(null)
+  useEffect(() => {
+    const load = () => { void fetchSelectedMission().then(setSelectedMission).catch(() => undefined) }
+    load()
+    const timer = window.setInterval(load, 1500)
+    return () => window.clearInterval(timer)
+  }, [])
   const mission = telemetry?.mission_status
   const connectionTone = connectionState === 'CONNECTED' && !stale ? 'green' : connectionState === 'CONNECTING' || connectionState === 'RECONNECTING' || stale ? 'amber' : 'red'
   const connectionLabel: Record<ConnectionState, string> = {
@@ -38,6 +57,44 @@ export function DashboardPage() {
       ? 'HARDWARE DATA'
       : 'SIMULATED DATA'
     : 'NO TELEMETRY'
+  const missionId = selectedMission?.id
+  const runCommand = async (command: string) => {
+    if (!missionId || busyCommand) return
+    if (command === 'abort' && !window.confirm('Abort the simulation mission?')) return
+    setBusyCommand(command)
+    setCommandMessage(null)
+    setCommandError(null)
+    try {
+      const result = command === 'upload'
+        ? await uploadMissionToSimulator(missionId, commandId())
+        : await simulationCommand(missionId, command, commandId())
+      if (result.status !== 'COMPLETED') throw new Error(result.message)
+      setCommandMessage(`${command.toUpperCase()} confirmed by simulator.`)
+    } catch (reason: unknown) {
+      setCommandError(reason instanceof Error ? reason.message : `${command} failed`)
+    } finally {
+      setBusyCommand(null)
+    }
+  }
+  const runFault = async (fault: 'gnss' | 'battery' | 'communication' | 'clear') => {
+    if (busyCommand) return
+    setBusyCommand(fault)
+    setCommandMessage(null)
+    setCommandError(null)
+    try {
+      if (fault === 'clear') await clearSimulationFaults()
+      else await injectSimulationFault(fault)
+      setCommandMessage(fault === 'clear' ? 'SIMULATED FAULTS CLEARED.' : `${fault.toUpperCase()} FAULT INJECTED.`)
+    } catch (reason: unknown) {
+      setCommandError(reason instanceof Error ? reason.message : 'Fault injection failed')
+    } finally {
+      setBusyCommand(null)
+    }
+  }
+  const enableVoice = () => {
+    updateVoice({ enabled: true, unlocked: true, muted: false, muteNonCritical: false })
+    unlockVoice()
+  }
 
   return (
     <>
@@ -57,6 +114,7 @@ export function DashboardPage() {
       </div>
 
       <div className="dashboard-grid mt-4">
+        {toast && <div className="settings-alert warning fixed right-5 top-5 z-50 max-w-sm" role="status"><AlertTriangle size={16} /><span><b>{toast.title}</b><br />{toast.message}</span></div>}
         <Panel title="Mission Map" icon={Map} className="map-panel">
           <MissionMap />
         </Panel>
@@ -74,8 +132,30 @@ export function DashboardPage() {
         </Panel>
 
         <Panel title="Return to Home / Abort Status" icon={Home}>
-          <div className="rth-status"><div className="rth-ring"><Home size={21} /><span>READY</span></div><div><p className="text-sm font-medium text-white">Return to Home available</p><p className="mt-1 text-[11px] text-slate-500">Failsafe altitude: <b className="text-slate-300">100 m</b></p></div></div>
-          <div className="button-row"><button className="outline-button"><Home size={13} /> RTH STANDBY</button><button className="danger-button"><AlertOctagon size={13} /> ABORT</button></div>
+          <div className="rth-status"><div className="rth-ring"><Home size={21} /><span>{mission?.state ?? 'READY'}</span></div><div><p className="text-sm font-medium text-white">Simulation mission controls</p><p className="mt-1 text-[11px] text-slate-500">Hardware actions remain disabled until ARIES V3 validation.</p></div></div>
+          {(commandMessage || commandError) && <p className={`settings-help mt-3 ${commandError ? 'text-amber-300' : 'text-emerald-300'}`}>{commandError ?? commandMessage}</p>}
+          <div className="button-row mt-3">
+            {(['upload', 'start', 'pause', 'resume', 'standby', 'rth', 'reset'] as const).map((command) => <button key={command} className="outline-button" disabled={!missionId || busyCommand !== null} onClick={() => void runCommand(command)}>{busyCommand === command ? 'WAITING…' : command === 'rth' ? 'REQUEST RTH' : command === 'reset' ? 'RESET DEMO' : command.toUpperCase()}</button>)}
+            <button className="danger-button" disabled={!missionId || busyCommand !== null} onClick={() => void runCommand('abort')}><AlertOctagon size={13} /> {busyCommand === 'abort' ? 'WAITING…' : 'ABORT MISSION'}</button>
+          </div>
+        </Panel>
+
+        <Panel title="Simulation Fault Injection" icon={AlertTriangle}>
+          <div className="settings-card">
+            <p className="settings-help">Simulation-only controls. Injected faults update the backend telemetry, logs, notifications, and sensor health. No hardware commands are sent.</p>
+            <div className="settings-actions mt-3">
+              <button className="outline-button" disabled={busyCommand !== null} onClick={() => void runFault('gnss')}>SIMULATE GNSS FAILURE</button>
+              <button className="outline-button" disabled={busyCommand !== null} onClick={() => void runFault('battery')}>SIMULATE LOW BATTERY</button>
+              <button className="outline-button" disabled={busyCommand !== null} onClick={() => void runFault('communication')}>SIMULATE COMMUNICATION LOSS</button>
+              <button className="outline-button" disabled={busyCommand !== null} onClick={() => void runFault('clear')}>CLEAR SIMULATED FAULTS</button>
+            </div>
+            <div className="settings-actions mt-3">
+              <button className="outline-button" disabled={!speechAvailable} onClick={enableVoice}>ENABLE VOICE ALERTS</button>
+              <button className="outline-button" disabled={!speechAvailable || !voice.unlocked} onClick={testVoice}>TEST VOICE</button>
+            </div>
+            {!speechAvailable && <p className="settings-help text-amber-300">Browser speech synthesis is unavailable.</p>}
+            {speechBlocked && <p className="settings-help text-amber-300">Voice playback was blocked or failed. Click Enable Voice Alerts again after allowing audio.</p>}
+          </div>
         </Panel>
 
         <Panel title="Mission Progress" icon={BarChart3}>

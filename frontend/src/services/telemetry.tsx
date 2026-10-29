@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 export type SensorStatus = 'VALID' | 'DEGRADED' | 'FAILED' | 'NO DATA'
 export type ConnectionState = 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'RECONNECTING' | 'ERROR'
 export type DataSource = 'simulation' | 'hardware'
+export type MissionTelemetryState = 'READY' | 'STANDBY' | 'UPLOADED' | 'UPLOAD_PENDING' | 'ACTIVE' | 'EXECUTING' | 'PAUSED' | 'RETURNING_HOME' | 'AT_HOME' | 'COMPLETED' | 'ABORTED' | 'FAULT'
 
 export type Telemetry = {
   timestamp: string
@@ -50,7 +51,7 @@ export type Telemetry = {
   }
   mission_status: {
     name: string
-    state: 'READY' | 'ACTIVE' | 'COMPLETED' | 'ABORTED'
+    state: MissionTelemetryState
     current_waypoint: string
     completed_waypoints: number
     total_waypoints: number
@@ -107,6 +108,13 @@ function isStatus(value: unknown): value is SensorStatus {
 
 function isDataSource(value: unknown): value is DataSource {
   return value === 'simulation' || value === 'hardware'
+}
+
+function isMissionTelemetryState(value: unknown): value is MissionTelemetryState {
+  return value === 'READY' || value === 'STANDBY' || value === 'UPLOADED' ||
+    value === 'UPLOAD_PENDING' || value === 'ACTIVE' || value === 'EXECUTING' ||
+    value === 'PAUSED' || value === 'RETURNING_HOME' || value === 'AT_HOME' ||
+    value === 'COMPLETED' || value === 'ABORTED' || value === 'FAULT'
 }
 
 function isTelemetry(value: unknown): value is Telemetry {
@@ -188,8 +196,18 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         try {
           const candidate: unknown = JSON.parse(event.data)
           if (candidate && typeof candidate === 'object' && 'type' in candidate &&
-              ((candidate as { type?: unknown }).type === 'mission_event' ||
-               (candidate as { type?: unknown }).type === 'status' ||
+              (candidate as { type?: unknown }).type === 'mission_event') {
+            const payload = (candidate as { payload?: { state?: unknown } }).payload
+            const state = payload?.state
+            if (isMissionTelemetryState(state)) {
+              setTelemetry((previous) => previous
+                ? { ...previous, mission_status: { ...previous.mission_status, state } }
+                : previous)
+            }
+            return
+          }
+          if (candidate && typeof candidate === 'object' && 'type' in candidate &&
+              ((candidate as { type?: unknown }).type === 'status' ||
                (candidate as { type?: unknown }).type === 'notification_event')) {
             return
           }

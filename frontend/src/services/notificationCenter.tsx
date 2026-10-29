@@ -43,6 +43,7 @@ type NotificationCenterValue = {
   unlockVoice: () => void
   testVoice: () => void
   testNotification: (severity: NotificationSeverity) => Promise<void>
+  toast: NotificationRecord | null
 }
 
 const defaultVoice: VoiceSettings = {
@@ -84,6 +85,7 @@ export function NotificationCenterProvider({ children }: { children: ReactNode }
     typeof window !== 'undefined' && 'speechSynthesis' in window ? window.speechSynthesis.getVoices() : [],
   )
   const [speechBlocked, setSpeechBlocked] = useState(false)
+  const [toast, setToast] = useState<NotificationRecord | null>(null)
   const [speechAvailable] = useState(typeof window !== 'undefined' && 'speechSynthesis' in window)
   const seenEventIds = useRef<Set<string>>(new Set())
   const queueRef = useRef<NotificationRecord[]>([])
@@ -148,6 +150,8 @@ export function NotificationCenterProvider({ children }: { children: ReactNode }
     seenEventIds.current.add(notification.event_id)
     setNotifications((previous) => [notification, ...previous])
     setUnreadCount((previous) => previous + 1)
+    setToast(notification)
+    window.setTimeout(() => setToast((current) => current?.id === notification.id ? null : current), 5000)
     queueRef.current.push(notification)
     speakNext()
   }
@@ -249,6 +253,7 @@ export function NotificationCenterProvider({ children }: { children: ReactNode }
       await sendTestNotification(severity)
       await refresh()
     },
+    toast,
   }
 
   return <NotificationCenterContext.Provider value={value}>{children}</NotificationCenterContext.Provider>

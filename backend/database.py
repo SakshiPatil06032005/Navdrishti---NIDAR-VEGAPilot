@@ -56,6 +56,7 @@ CSV_COLUMNS = (
     "timestamp",
     "recorded_at",
     "event_type",
+    "category",
     "severity",
     "data_source",
     "sensor",
@@ -146,7 +147,8 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS idx_notifications_timestamp ON notifications (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications (read, dismissed, timestamp DESC);
 
-CREATE VIEW IF NOT EXISTS log_records AS
+DROP VIEW IF EXISTS log_records;
+CREATE VIEW log_records AS
 SELECT
     'T' || telemetry_records.id AS uid,
     telemetry_records.timestamp AS timestamp,
@@ -164,7 +166,8 @@ SELECT
     telemetry_records.altitude_m AS altitude_m,
     telemetry_records.relative_altitude_m AS relative_altitude_m,
     telemetry_records.link_connected AS link_connected,
-    telemetry_records.link_signal_percent AS link_signal_percent
+    telemetry_records.link_signal_percent AS link_signal_percent,
+    'Telemetry' AS category
 FROM telemetry_records
 UNION ALL
 SELECT
@@ -182,7 +185,13 @@ SELECT
     NULL,
     NULL,
     NULL,
-    NULL
+    NULL,
+    CASE
+        WHEN lower(COALESCE(fault_events.sensor, '')) = 'battery' OR upper(fault_events.code) LIKE '%BATTERY%' THEN 'Battery'
+        WHEN lower(COALESCE(fault_events.sensor, '')) = 'link' OR upper(fault_events.code) LIKE '%LINK%' OR upper(fault_events.code) LIKE '%COMM%' THEN 'Communication'
+        WHEN upper(fault_events.code) LIKE '%FAILSAFE%' THEN 'Failsafe'
+        ELSE 'Sensor'
+    END
 FROM fault_events
 UNION ALL
 SELECT
@@ -200,7 +209,12 @@ SELECT
     NULL,
     NULL,
     NULL,
-    NULL
+    NULL,
+    CASE
+        WHEN upper(system_events.event_type) LIKE '%FAILSAFE%' THEN 'Failsafe'
+        WHEN lower(COALESCE(system_events.sensor, '')) = 'link' OR upper(system_events.event_type) LIKE '%CONNECTION%' OR upper(system_events.event_type) LIKE '%COMM%' THEN 'Communication'
+        ELSE 'System'
+    END
 FROM system_events;
 """
 
@@ -221,6 +235,7 @@ class LogFilter:
     sensor: str | None = None
     severity: str | None = None
     event_type: str | None = None
+    category: str | None = None
     data_source: str | None = None
     search: str | None = None
 
@@ -232,6 +247,7 @@ class LogFilter:
             sensor=self.sensor.strip() or None if self.sensor else None,
             severity=self.severity.strip().upper() or None if self.severity else None,
             event_type=self.event_type.strip().upper() or None if self.event_type else None,
+            category=self.category.strip().title() or None if self.category else None,
             data_source=self.data_source.strip().lower() or None if self.data_source else None,
             search=self.search.strip() or None if self.search else None,
         )
@@ -263,12 +279,16 @@ def _build_where(filters: LogFilter, source: str = "view") -> tuple[str, list[An
             clauses.append("1 = 0")
         if filters.event_type and filters.event_type != EVENT_TELEMETRY:
             clauses.append("1 = 0")
+        if filters.category and filters.category != "Telemetry":
+            clauses.append("1 = 0")
         if filters.sensor:
             clauses.append("sensors LIKE ?")
             params.append(f"%{filters.sensor.strip()}%")
         if filters.search:
             clauses.append("(flight_mode LIKE ? OR sensors LIKE ?)")
             params.extend([f"%{filters.search}%", f"%{filters.search}%"])
+        if filters.category:
+            clauses.append("1 = 0")
     else:
         if filters.severity:
             clauses.append("severity = ?")
@@ -276,6 +296,9 @@ def _build_where(filters: LogFilter, source: str = "view") -> tuple[str, list[An
         if filters.event_type:
             clauses.append("event_type = ?")
             params.append(filters.event_type)
+        if filters.category:
+            clauses.append("category = ?")
+            params.append(filters.category)
         if filters.sensor:
             clauses.append("sensor IS NOT NULL AND sensor LIKE ?")
             params.append(f"%{filters.sensor.strip()}%")
@@ -302,6 +325,7 @@ class LogStore:
         self.path = Path(path) if path is not None else DEFAULT_DB_PATH
         self._lock = threading.RLock()
         self._conn: sqlite3.Connection | None = None
+        self._mission_db_path: Path | None = None
         self.last_error: str | None = None
         self.available = False
 
@@ -669,20 +693,62 @@ class LogStore:
     # ------------------------------------------------------------------
     # reads
     # ------------------------------------------------------------------
-    def query_records(self, filters: LogFilter, limit: int, offset: int) -> tuple[int, list[dict[str, Any]]]:
+    def _records_from(self, connection: sqlite3.Connection, mission_db_path: Path | str | None) -> str:
+        if mission_db_path is None:
+            return "log_records"
+        resolved = Path(mission_db_path).resolve()
+        if resolved == self.path.resolve():
+            return self._records_union("mission_events")
+        if self._mission_db_path != resolved:
+            if self._mission_db_path is not None:
+                connection.execute("DETACH DATABASE mission_log_db")
+            connection.execute("ATTACH DATABASE ? AS mission_log_db", (str(resolved),))
+            self._mission_db_path = resolved
+        return self._records_union("mission_log_db.mission_events")
+
+    @staticmethod
+    def _records_union(mission_table: str) -> str:
+        return f"""(
+            SELECT * FROM log_records
+            UNION ALL
+            SELECT
+                'M' || id AS uid, timestamp, timestamp AS recorded_at,
+                'MISSION' AS event_type, data_source, level AS severity,
+                NULL AS sensor, code, message,
+                NULL AS flight_mode, NULL AS battery_voltage_v, NULL AS altitude_m,
+                NULL AS relative_altitude_m, NULL AS link_connected,
+                NULL AS link_signal_percent,
+                CASE
+                    WHEN upper(code) LIKE 'WAYPOINT%' THEN 'Waypoint'
+                    WHEN upper(code) LIKE '%FAILSAFE%' THEN 'Failsafe'
+                    WHEN upper(code) LIKE '%BATTERY%' THEN 'Battery'
+                    WHEN upper(code) LIKE '%COMM%' OR upper(code) LIKE '%LINK%' THEN 'Communication'
+                    ELSE 'Mission'
+                END AS category
+            FROM {mission_table}
+        )"""
+
+    def query_records(
+        self,
+        filters: LogFilter,
+        limit: int,
+        offset: int,
+        mission_db_path: Path | str | None = None,
+    ) -> tuple[int, list[dict[str, Any]]]:
         """Return the total match count and one page of records, newest first."""
         conn = self._connect()
         if conn is None:
             return 0, []
-        where, params = _build_where(filters)
         try:
             with self._lock:
+                records_from = self._records_from(conn, mission_db_path)
+                where, params = _build_where(filters)
                 total = conn.execute(
-                    f"SELECT COUNT(*) FROM log_records {where}", params
+                    f"SELECT COUNT(*) FROM {records_from} {where}", params
                 ).fetchone()[0]
                 rows = conn.execute(
                     f"""
-                    SELECT * FROM log_records {where}
+                    SELECT * FROM {records_from} {where}
                     ORDER BY timestamp DESC, uid DESC
                     LIMIT ? OFFSET ?
                     """,
@@ -714,16 +780,17 @@ class LogStore:
             return []
         return _downsample(rows, max_points)
 
-    def query_stats(self, filters: LogFilter) -> dict[str, int]:
+    def query_stats(self, filters: LogFilter, mission_db_path: Path | str | None = None) -> dict[str, int]:
         """Return record counts grouped by event type and severity."""
         conn = self._connect()
         if conn is None:
             return {}
-        where, params = _build_where(filters)
         try:
             with self._lock:
+                records_from = self._records_from(conn, mission_db_path)
+                where, params = _build_where(filters)
                 rows = conn.execute(
-                    f"SELECT event_type, severity, code, COUNT(*) AS total FROM log_records {where} GROUP BY event_type, severity, code",
+                    f"SELECT event_type, severity, code, COUNT(*) AS total FROM {records_from} {where} GROUP BY event_type, severity, code",
                     params,
                 ).fetchall()
         except sqlite3.Error as exc:
@@ -735,6 +802,7 @@ class LogStore:
             "telemetry": 0,
             "faults": 0,
             "system": 0,
+            "mission": 0,
             "warnings": 0,
             "errors": 0,
             "connection_losses": 0,
@@ -750,6 +818,8 @@ class LogStore:
                 stats["faults"] += total
             elif event_type == EVENT_SYSTEM:
                 stats["system"] += total
+            elif event_type == "MISSION":
+                stats["mission"] += total
             if severity == SEVERITY_WARNING:
                 stats["warnings"] += total
             elif severity in (SEVERITY_ERROR, SEVERITY_CRITICAL):
@@ -758,16 +828,17 @@ class LogStore:
                 stats["connection_losses"] += total
         return stats
 
-    def export_csv(self, filters: LogFilter) -> str:
+    def export_csv(self, filters: LogFilter, mission_db_path: Path | str | None = None) -> str:
         """Return every matching record as CSV text, oldest first."""
         conn = self._connect()
         if conn is None:
             return _csv_header()
-        where, params = _build_where(filters)
         try:
             with self._lock:
+                records_from = self._records_from(conn, mission_db_path)
+                where, params = _build_where(filters)
                 rows = conn.execute(
-                    f"SELECT * FROM log_records {where} ORDER BY timestamp ASC, uid ASC",
+                    f"SELECT * FROM {records_from} {where} ORDER BY timestamp ASC, uid ASC",
                     params,
                 ).fetchall()
         except sqlite3.Error as exc:

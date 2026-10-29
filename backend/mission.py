@@ -37,6 +37,7 @@ class MissionEvent(BaseModel):
     code: str
     message: str
     command_id: str | None = None
+    data_source: str = "simulation"
 
 
 class MissionCommandResult(BaseModel):
@@ -78,7 +79,7 @@ class MissionStore:
                 CREATE TABLE IF NOT EXISTS mission_events (
                     id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, timestamp TEXT NOT NULL,
                     level TEXT NOT NULL, code TEXT NOT NULL, message TEXT NOT NULL,
-                    command_id TEXT
+                    command_id TEXT, data_source TEXT NOT NULL DEFAULT 'simulation'
                 );
                 CREATE TABLE IF NOT EXISTS mission_commands (
                     command_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL,
@@ -96,6 +97,9 @@ class MissionStore:
             ):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE mission_drafts ADD COLUMN {name} {definition}")
+            event_columns = {row["name"] for row in connection.execute("PRAGMA table_info(mission_events)")}
+            if "data_source" not in event_columns:
+                connection.execute("ALTER TABLE mission_events ADD COLUMN data_source TEXT NOT NULL DEFAULT 'simulation'")
             command_columns = {row["name"] for row in connection.execute("PRAGMA table_info(mission_commands)")}
             for name, definition in (
                 ("requested_at", "TEXT"),
@@ -136,7 +140,11 @@ class MissionStore:
             connection.execute(
                 "INSERT INTO mission_drafts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name, revision=excluded.revision, "
-                "state=excluded.state, waypoints=excluded.waypoints, active_waypoint_index=excluded.active_waypoint_index",
+                "state=excluded.state, waypoints=excluded.waypoints, "
+                "active_waypoint_index=excluded.active_waypoint_index, "
+                "home_latitude_deg=excluded.home_latitude_deg, "
+                "home_longitude_deg=excluded.home_longitude_deg, "
+                "onboard_state=excluded.onboard_state",
                 (mission.id, mission.name, mission.revision, mission.state.value,
                  json.dumps([waypoint.model_dump(mode="json") for waypoint in mission.waypoints]),
                  mission.active_waypoint_index, mission.home_latitude_deg,
@@ -173,20 +181,30 @@ class MissionStore:
             connection.execute("DELETE FROM mission_drafts WHERE id = ?", (mission_id,))
             connection.execute("DELETE FROM mission_events WHERE mission_id = ?", (mission_id,))
 
-    def event(self, mission_id: str, level: str, code: str, message: str, command_id: str | None = None) -> MissionEvent:
+    def event(
+        self,
+        mission_id: str,
+        level: str,
+        code: str,
+        message: str,
+        command_id: str | None = None,
+        data_source: str = "simulation",
+    ) -> MissionEvent:
         result = MissionEvent(id=str(uuid4()), mission_id=mission_id, timestamp=datetime.now(UTC),
-                              level=level, code=code, message=message, command_id=command_id)
+                              level=level, code=code, message=message, command_id=command_id,
+                              data_source=data_source)
         with self._connect() as connection:
-            connection.execute("INSERT INTO mission_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            connection.execute("INSERT INTO mission_events (id, mission_id, timestamp, level, code, message, command_id, data_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                                (result.id, result.mission_id, result.timestamp.isoformat(), result.level,
-                                result.code, result.message, result.command_id))
+                                result.code, result.message, result.command_id, result.data_source))
         return result
 
     def events(self, mission_id: str) -> list[MissionEvent]:
         with self._connect() as connection:
             rows = connection.execute("SELECT * FROM mission_events WHERE mission_id = ? ORDER BY timestamp", (mission_id,)).fetchall()
         return [MissionEvent(id=row["id"], mission_id=row["mission_id"], timestamp=row["timestamp"],
-                             level=row["level"], code=row["code"], message=row["message"], command_id=row["command_id"]) for row in rows]
+                             level=row["level"], code=row["code"], message=row["message"], command_id=row["command_id"],
+                             data_source=row["data_source"]) for row in rows]
 
     def command(self, result: MissionCommandResult) -> MissionCommandResult:
         with self._connect() as connection:
@@ -249,6 +267,12 @@ class MissionManager:
         self.selected_id = self.store.list_missions()[0].id
         self.pending_since: dict[str, float] = {}
         self.command_timeout_s = 5.0
+        mission = self.selected()
+        first = mission.waypoints[0]
+        self.simulated_latitude_deg = mission.home_latitude_deg if mission.home_latitude_deg is not None else first.latitude_deg
+        self.simulated_longitude_deg = mission.home_longitude_deg if mission.home_longitude_deg is not None else first.longitude_deg
+        self.simulated_altitude_m = 0.0
+        self.simulated_speed_mps = 35.0
 
     def selected(self) -> MissionDraft:
         return self.store.get(self.selected_id)
@@ -262,10 +286,13 @@ class MissionManager:
 
     def status(self, mission: MissionDraft | None = None) -> MissionStatus:
         mission = mission or self.selected()
-        active = mission.waypoints[mission.active_waypoint_index]
+        active = mission.waypoints[min(mission.active_waypoint_index, len(mission.waypoints) - 1)]
         completed = sum(waypoint.status == "completed" for waypoint in mission.waypoints)
         return MissionStatus(name=mission.name, state=mission.state, current_waypoint=active.label,
                              completed_waypoints=completed, total_waypoints=len(mission.waypoints))
+
+    def simulated_position(self) -> tuple[float, float, float]:
+        return (self.simulated_latitude_deg, self.simulated_longitude_deg, self.simulated_altitude_m)
 
     def execute(self, command: str, command_id: str, hardware: bool) -> MissionCommandResult:
         existing = self.store.existing_command(command_id)
@@ -273,14 +300,26 @@ class MissionManager:
             return existing
         mission = self.selected()
         transitions = {
-            "upload": (MissionState.READY, MissionState.UPLOAD_PENDING),
-            "start": (MissionState.UPLOADED, MissionState.EXECUTING),
-            "abort": (MissionState.EXECUTING, MissionState.ABORTED),
+            "upload": ({MissionState.READY}, MissionState.UPLOAD_PENDING),
+            "start": ({MissionState.UPLOADED}, MissionState.EXECUTING),
         }
+        if command in {"pause", "abort", "rth", "standby", "reset", "resume"}:
+            allowed = {
+                "pause": ({MissionState.EXECUTING}, MissionState.PAUSED),
+                "resume": ({MissionState.PAUSED}, MissionState.EXECUTING),
+                "abort": ({MissionState.EXECUTING, MissionState.PAUSED, MissionState.RETURNING_HOME}, MissionState.ABORTED),
+                "rth": ({MissionState.EXECUTING, MissionState.PAUSED}, MissionState.RETURNING_HOME),
+                "standby": ({MissionState.READY, MissionState.UPLOADED, MissionState.STANDBY}, MissionState.STANDBY),
+                "reset": ({mission.state}, MissionState.READY),
+            }
+            valid_states, target = allowed[command]
+            if command == "rth" and (mission.home_latitude_deg is None or mission.home_longitude_deg is None):
+                raise ValueError("Cannot request RTH without a configured home position.")
+            transitions[command] = (valid_states, target)
         if command not in transitions:
             raise ValueError("Unsupported mission command.")
-        required, target = transitions[command]
-        if mission.state != required:
+        valid_states, target = transitions[command]
+        if mission.state not in valid_states:
             now = datetime.now(UTC)
             rejected = MissionCommandResult(
                 command_id=command_id, mission_id=mission.id, command=command,
@@ -289,7 +328,8 @@ class MissionManager:
                 requested_at=now, updated_at=now, status_history=[CommandLifecycle.REQUESTED, CommandLifecycle.REJECTED],
             )
             self.store.command(rejected)
-            self.store.event(mission.id, "WARNING", f"MISSION_{command.upper()}_REJECTED", rejected.message, command_id)
+            self.store.event(mission.id, "WARNING", f"MISSION_{command.upper()}_REJECTED", rejected.message,
+                             command_id, "hardware" if hardware else "simulation")
             raise ValueError(rejected.message)
         now = datetime.now(UTC)
         status = CommandLifecycle.SENT if hardware else CommandLifecycle.COMPLETED
@@ -308,6 +348,13 @@ class MissionManager:
         if not hardware:
             state = MissionState.UPLOADED if command == "upload" else target
             onboard_state = "SIMULATED_CONFIRMED" if command == "upload" else mission.onboard_state
+            if command == "reset":
+                waypoints = [waypoint.model_copy(update={"status": "current" if index == 0 else "pending"}) for index, waypoint in enumerate(mission.waypoints)]
+                mission = mission.model_copy(update={"waypoints": waypoints, "active_waypoint_index": 0})
+                first = waypoints[0]
+                self.simulated_latitude_deg = mission.home_latitude_deg if mission.home_latitude_deg is not None else first.latitude_deg
+                self.simulated_longitude_deg = mission.home_longitude_deg if mission.home_longitude_deg is not None else first.longitude_deg
+                self.simulated_altitude_m = 0.0
             result_state = state
             mission = mission.model_copy(update={"state": state, "onboard_state": onboard_state, "revision": mission.revision + 1})
             self.store.save(mission)
@@ -317,8 +364,9 @@ class MissionManager:
         self.store.command(result)
         if status is CommandLifecycle.SENT:
             self.pending_since[command_id] = monotonic()
-        self.store.event(mission.id, "INFO" if not hardware else "WARNING", f"MISSION_{command.upper()}",
-                         message, command_id)
+        level = "WARNING" if command in {"abort", "rth"} else "INFO"
+        self.store.event(mission.id, level if not hardware else "WARNING", f"MISSION_{command.upper()}",
+                         message, command_id, "hardware" if hardware else "simulation")
         return result
 
     def command_status(self, command_id: str) -> MissionCommandResult:
@@ -372,18 +420,39 @@ class MissionManager:
             self.store.save(mission)
             updated = updated.model_copy(update={"state": target_state})
             self.store.event(mission.id, "WARNING" if result.command == "abort" else "INFO",
-                             f"MISSION_{result.command.upper()}_CONFIRMED", updated.message, command_id)
+                             f"MISSION_{result.command.upper()}_CONFIRMED", updated.message, command_id, "hardware")
         elif status is CommandLifecycle.REJECTED:
-            self.store.event(result.mission_id, "WARNING", "MISSION_COMMAND_REJECTED", updated.message, command_id)
+            self.store.event(result.mission_id, "WARNING", "MISSION_COMMAND_REJECTED", updated.message, command_id, "hardware")
         self.store.command(updated)
         return updated
 
     def tick(self) -> MissionEvent | None:
         mission = self.selected()
-        if mission.state != MissionState.EXECUTING:
+        if mission.state not in {MissionState.EXECUTING, MissionState.RETURNING_HOME}:
+            return None
+        if mission.state is MissionState.RETURNING_HOME:
+            target_latitude = mission.home_latitude_deg
+            target_longitude = mission.home_longitude_deg
+            if target_latitude is None or target_longitude is None:
+                return None
+            reached = self._move_toward(target_latitude, target_longitude)
+            if reached:
+                updated = mission.model_copy(update={"state": MissionState.AT_HOME, "revision": mission.revision + 1})
+                self.store.save(updated)
+                return self.store.event(mission.id, "INFO", "MISSION_AT_HOME", "Simulation reached the configured home position.")
             return None
         index = mission.active_waypoint_index
         if index >= len(mission.waypoints) - 1:
+            self._move_toward(mission.waypoints[index].latitude_deg, mission.waypoints[index].longitude_deg)
+            if self._distance_to(mission.waypoints[index].latitude_deg, mission.waypoints[index].longitude_deg) > 2:
+                return None
+            waypoints = [waypoint.model_copy(update={"status": "completed"}) for waypoint in mission.waypoints]
+            updated = mission.model_copy(update={"waypoints": waypoints, "state": MissionState.COMPLETED, "revision": mission.revision + 1})
+            self.store.save(updated)
+            return self.store.event(mission.id, "INFO", "MISSION_COMPLETED", "Simulation completed all five waypoints.")
+        target = mission.waypoints[index]
+        self._move_toward(target.latitude_deg, target.longitude_deg)
+        if self._distance_to(target.latitude_deg, target.longitude_deg) > 2:
             return None
         waypoints = [waypoint.model_copy() for waypoint in mission.waypoints]
         waypoints[index] = waypoints[index].model_copy(update={"status": "completed"})
@@ -392,3 +461,20 @@ class MissionManager:
         mission = mission.model_copy(update={"waypoints": waypoints, "active_waypoint_index": next_index, "revision": mission.revision + 1})
         self.store.save(mission)
         return self.store.event(mission.id, "INFO", "WAYPOINT_REACHED", f"Reached {waypoints[index].label}.")
+
+    def _distance_to(self, latitude: float, longitude: float) -> float:
+        lat_scale = 111_000
+        lon_scale = 111_000
+        return (((latitude - self.simulated_latitude_deg) * lat_scale) ** 2 +
+                ((longitude - self.simulated_longitude_deg) * lon_scale) ** 2) ** 0.5
+
+    def _move_toward(self, latitude: float, longitude: float) -> bool:
+        distance = self._distance_to(latitude, longitude)
+        if distance <= self.simulated_speed_mps:
+            self.simulated_latitude_deg = latitude
+            self.simulated_longitude_deg = longitude
+            return True
+        ratio = self.simulated_speed_mps / distance
+        self.simulated_latitude_deg += (latitude - self.simulated_latitude_deg) * ratio
+        self.simulated_longitude_deg += (longitude - self.simulated_longitude_deg) * ratio
+        return False

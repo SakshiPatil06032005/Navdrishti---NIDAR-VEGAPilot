@@ -19,6 +19,7 @@ from backend.database import (
     LogStore,
 )
 from backend.models import FaultEvent, SensorStatus
+from backend.mission import MissionStore
 
 
 @pytest.fixture
@@ -194,7 +195,7 @@ def test_export_csv_writes_headers_and_rows(store, make_packet):
     assert rows[0] == list(CSV_COLUMNS)
     assert len(rows) == 3
     assert {row[2] for row in rows[1:]} == {EVENT_TELEMETRY, EVENT_FAULT}
-    assert all(row[4] == "simulation" for row in rows[1:])
+    assert all(row[5] == "simulation" for row in rows[1:])
 
 
 def test_export_csv_respects_the_active_filters(store, make_packet):
@@ -209,6 +210,65 @@ def test_export_csv_respects_the_active_filters(store, make_packet):
     payload = store.export_csv(LogFilter(event_type=EVENT_FAULT))
     rows = list(csv.reader(io.StringIO(payload)))
     assert len(rows) == 1
+
+
+def test_mission_events_join_log_view_with_combined_filters_and_pagination(store, make_packet, tmp_path):
+    base = datetime.now(UTC) - timedelta(minutes=5)
+    mission_store = MissionStore(tmp_path / "mission-events.db")
+    mission = mission_store.list_missions()[0]
+    mission_store.event(mission.id, "INFO", "MISSION_START", "Mission started", data_source="simulation")
+    mission_store.event(mission.id, "INFO", "MISSION_PAUSE", "Mission paused", data_source="simulation")
+    mission_store.event(mission.id, "INFO", "MISSION_RTH", "Mission return home", data_source="simulation")
+    mission_store.event(mission.id, "INFO", "WAYPOINT_REACHED", "Reached WP 01", data_source="simulation")
+    mission_store.event(mission.id, "WARNING", "MISSION_ABORT", "Mission aborted", data_source="hardware")
+    store.record_telemetry(make_packet(base, data_source="simulation"))
+    store.record_fault(
+        FaultEvent(
+            timestamp=base + timedelta(seconds=1),
+            severity=SEVERITY_WARNING,
+            code="GNSS_DEGRADED",
+            message="GNSS fix degraded.",
+            sensor="gnss",
+        ),
+        "simulation",
+        "gnss",
+    )
+
+    filters = LogFilter(
+        category="Mission",
+        severity="INFO",
+        data_source="simulation",
+        search="mission",
+    ).normalised()
+    total, first_page = store.query_records(filters, limit=1, offset=0, mission_db_path=mission_store.path)
+    _, second_page = store.query_records(filters, limit=1, offset=1, mission_db_path=mission_store.path)
+    assert total == 3
+    assert len(first_page) == 1
+    assert len(second_page) == 1
+    assert first_page[0]["event_type"] == "MISSION"
+    assert first_page[0]["category"] == "Mission"
+    assert first_page[0]["code"] != second_page[0]["code"]
+
+    _, waypoint = store.query_records(
+        LogFilter(category="Waypoint", search="WP 01"),
+        limit=10,
+        offset=0,
+        mission_db_path=mission_store.path,
+    )
+    assert len(waypoint) == 1
+    assert waypoint[0]["code"] == "WAYPOINT_REACHED"
+
+    payload = store.export_csv(
+        LogFilter(category="Mission", data_source="hardware"),
+        mission_db_path=mission_store.path,
+    )
+    rows = list(csv.DictReader(io.StringIO(payload)))
+    assert len(rows) == 1
+    assert rows[0]["code"] == "MISSION_ABORT"
+    assert rows[0]["category"] == "Mission"
+
+    _, ordered = store.query_records(LogFilter(category="Mission"), limit=10, offset=0, mission_db_path=mission_store.path)
+    assert [row["timestamp"] for row in ordered] == sorted([row["timestamp"] for row in ordered], reverse=True)
 
 
 def test_database_errors_are_handled_gracefully(tmp_path, make_packet):
